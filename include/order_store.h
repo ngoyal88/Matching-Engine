@@ -6,7 +6,6 @@
 #include <mutex>
 #include <atomic>
 #include <string>
-#include <fstream>
 
 class OrderStore {
 public:
@@ -16,17 +15,13 @@ public:
     std::string next_id();
     void add_order(const Order &o);
     bool has_order(const std::string &id);
+    Order get_order(const std::string &id);
 
 private:
     std::unordered_map<std::string, Order> orders;
     std::mutex mu;
     std::atomic<uint64_t> id_counter;
-
-    // Write-ahead log for audit & recovery
-    std::ofstream wal;
-    std::string wal_path;
-
-    void wal_write(const std::string &line);
+    std::string wal_path; // kept for compatibility, actual WAL is global
 };
 
 extern OrderStore global_order_store;
