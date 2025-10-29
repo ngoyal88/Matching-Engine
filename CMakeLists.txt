@@ -27,7 +27,7 @@ add_executable(matching_engine
 
 # Link libraries
 if(WIN32)
-    target_link_libraries(matching_engine PRIVATE ws2_32)
+    target_link_libraries(matching_engine PRIVATE ws2_32 advapi32)
 else()
     # For Linux/Unix - link pthread and filesystem
     target_link_libraries(matching_engine PRIVATE pthread)

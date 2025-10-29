@@ -1,20 +1,23 @@
+// ============================================================================
 // FILE: src/order_book.cpp
+// ============================================================================
 #include "../include/order_book.h"
-#include <algorithm>   // std::min
-#include <atomic>      // std::atomic
-#include <cstdint>     // uint64_t
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <chrono>
-#include <ctime>       // std::gmtime
+#include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 using namespace std;
 
-// Simple counter-based trade id (avoids optional platform UUID dependencies)
 static atomic<uint64_t> trade_counter{1};
 
 static string make_trade_id() {
     auto id = trade_counter.fetch_add(1);
-    ostringstream ss; ss << "T-" << id;
+    ostringstream ss; 
+    ss << "T-" << id;
     return ss.str();
 }
 
@@ -28,24 +31,59 @@ string OrderBook::now_iso() {
 
 OrderBook::OrderBook(const string &symbol) : symbol_(symbol) {}
 
+void OrderBook::calculate_fees(Trade &trade) {
+    long long notional = (trade.price * trade.quantity) / 100000000LL;
+    trade.maker_fee = (notional * fee_config_.maker_fee_bps) / 10000LL;
+    trade.taker_fee = (notional * fee_config_.taker_fee_bps) / 10000LL;
+}
+
 vector<Trade> OrderBook::add_order(const Order &order) {
     vector<Trade> trades;
     lock_guard<mutex> lk(mu_);
 
     long long remaining = order.quantity;
+    long long original_qty = order.quantity;
     bool is_buy = (order.side == "buy");
 
-    // Helper lambdas
-    auto match_against_book = [&](auto &book_map, [[maybe_unused]] bool book_is_ask) {
-        // book_map is asks_ when incoming is buy, and bids_ when incoming is sell
+    // Pre-check for FOK: ensure full fillability without mutating the book
+    if (order.order_type == "fok") {
+        long long fillable = 0;
+        if (is_buy) {
+            for (const auto &level : asks_) {
+                long long price_level = level.first;
+                if (order.price > 0 && price_level > order.price) break; // price constraint
+                for (const auto &o : level.second) {
+                    fillable += o.quantity;
+                    if (fillable >= order.quantity) break;
+                }
+                if (fillable >= order.quantity) break;
+            }
+        } else { // sell
+            for (const auto &level : bids_) {
+                long long price_level = level.first;
+                if (order.price > 0 && price_level < order.price) break; // price constraint
+                for (const auto &o : level.second) {
+                    fillable += o.quantity;
+                    if (fillable >= order.quantity) break;
+                }
+                if (fillable >= order.quantity) break;
+            }
+        }
+        if (fillable < order.quantity) {
+            // Not fully fillable: cancel without side-effects
+            return trades; // empty
+        }
+    }
+
+    auto match_against_book = [&](auto &book_map) {
         while (remaining > 0 && !book_map.empty()) {
-            auto it = book_map.begin(); // best price level
+            auto it = book_map.begin();
             long long price_level = it->first;
 
-            // check price constraints for limit orders
+            // Price constraint for limit orders
             if (order.order_type == "limit") {
-                if (is_buy && price_level > order.price) break; // best ask > buy limit
-                if (!is_buy && price_level < order.price) break; // best bid < sell limit
+                if (is_buy && price_level > order.price) break;
+                if (!is_buy && price_level < order.price) break;
             }
 
             auto &q = it->second;
@@ -53,7 +91,6 @@ vector<Trade> OrderBook::add_order(const Order &order) {
                 Order maker = q.front();
                 long long trade_qty = min(remaining, maker.quantity);
 
-                // produce trade
                 Trade tr;
                 tr.trade_id = make_trade_id();
                 tr.symbol = symbol_;
@@ -63,44 +100,48 @@ vector<Trade> OrderBook::add_order(const Order &order) {
                 tr.maker_order_id = maker.order_id;
                 tr.taker_order_id = order.order_id;
                 tr.timestamp_iso = now_iso();
+                calculate_fees(tr);
 
                 trades.push_back(tr);
 
-                // update quantities
                 remaining -= trade_qty;
                 maker.quantity -= trade_qty;
 
-                // pop or update maker in-place
                 q.pop_front();
                 if (maker.quantity > 0) {
-                    // remaining part of maker goes back to front (preserve FIFO)
                     q.push_front(maker);
                 } else {
-                    // fully filled -> remove index
-                    order_index_.erase(tr.maker_order_id);
+                    order_index_.erase(maker.order_id);
                 }
             }
 
-            // if price level empty, erase it
             if (q.empty()) {
                 book_map.erase(it);
-            } else {
-                // if incoming is limit and still cannot trade at this price, stop
-                // but above we already enforced price constraints
-                ;
             }
         }
     };
 
     if (is_buy) {
-        // match against asks (lowest first)
-        match_against_book(asks_, true);
+        match_against_book(asks_);
     } else {
-        // sell -> match against bids (highest first)
-        match_against_book(bids_, false);
+        match_against_book(bids_);
     }
 
-    // If there is remaining quantity and order is limit => rest on book
+    // Handle IOC - cancel unfilled portion
+    if (order.order_type == "ioc" && remaining > 0) {
+        return trades;
+    }
+
+    // Handle FOK - at this point we've ensured full fillability; if anything left, treat as cancel
+    if (order.order_type == "fok") {
+        // If some remaining (shouldn't happen due to pre-check), cancel without resting
+        if (remaining > 0) {
+            trades.clear();
+        }
+        return trades;
+    }
+
+    // Rest limit orders on book
     if (remaining > 0 && order.order_type == "limit") {
         Order resting = order;
         resting.quantity = remaining;
@@ -119,34 +160,31 @@ bool OrderBook::cancel_order(const string &order_id) {
     lock_guard<mutex> lk(mu_);
     auto it = order_index_.find(order_id);
     if (it == order_index_.end()) return false;
+    
     long long price = it->second.first;
     bool is_buy = it->second.second;
 
     if (is_buy) {
-        auto &book_map = bids_;
-        auto lvl_it = book_map.find(price);
-        if (lvl_it == book_map.end()) return false;
-
+        auto lvl_it = bids_.find(price);
+        if (lvl_it == bids_.end()) return false;
         auto &dq = lvl_it->second;
         for (auto dq_it = dq.begin(); dq_it != dq.end(); ++dq_it) {
             if (dq_it->order_id == order_id) {
                 dq.erase(dq_it);
                 order_index_.erase(it);
-                if (dq.empty()) book_map.erase(lvl_it);
+                if (dq.empty()) bids_.erase(lvl_it);
                 return true;
             }
         }
     } else {
-        auto &book_map = asks_;
-        auto lvl_it = book_map.find(price);
-        if (lvl_it == book_map.end()) return false;
-
+        auto lvl_it = asks_.find(price);
+        if (lvl_it == asks_.end()) return false;
         auto &dq = lvl_it->second;
         for (auto dq_it = dq.begin(); dq_it != dq.end(); ++dq_it) {
             if (dq_it->order_id == order_id) {
                 dq.erase(dq_it);
                 order_index_.erase(it);
-                if (dq.empty()) book_map.erase(lvl_it);
+                if (dq.empty()) asks_.erase(lvl_it);
                 return true;
             }
         }
