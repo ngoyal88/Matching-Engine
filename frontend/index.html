@@ -1,496 +1,816 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Matching Engine - Trading Dashboard</title>
+    <title>Matching Engine</title>
+
+    <!-- 
+      Using reliable CDN links for Tailwind and Lucide.
+      The Lucide CJS link is replaced with the correct UMD (browser) link.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.552.0/dist/cjs/lucide.min.js"></script>
+
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
         }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+
+        ::-webkit-scrollbar-track {
+            background: #111827; /* gray-900 */
         }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        
-        .header {
-            background: rgba(255,255,255,0.95);
-            padding: 20px;
+
+        ::-webkit-scrollbar-thumb {
+            background-color: #374151; /* gray-700 */
             border-radius: 10px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
-        
-        .header h1 {
-            color: #667eea;
-            margin-bottom: 10px;
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563; /* gray-600 */
         }
-        
-        .api-key-section {
+
+        /* Order book depth visualization */
+        .depth-bar {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            z-index: 1;
+            opacity: 0.15;
+            transition: width 0.1s ease-in-out;
+        }
+
+        .depth-bar-bid {
+            right: 0;
+            background-color: #22c55e; /* green-500 */
+        }
+
+        .depth-bar-ask {
+            right: 0;
+            background-color: #ef4444; /* red-500 */
+        }
+
+        /* Chart Placeholder Style */
+        .chart-placeholder {
             display: flex;
-            gap: 10px;
             align-items: center;
-        }
-        
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s;
-        }
-        
-        .btn-primary {
-            background: #667eea;
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: #5568d3;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }
-        
-        .btn-success {
-            background: #48bb78;
-            color: white;
-        }
-        
-        .btn-danger {
-            background: #f56565;
-            color: white;
-        }
-        
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 2fr 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .panel {
-            background: rgba(255,255,255,0.95);
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        
-        .panel h2 {
-            color: #667eea;
-            margin-bottom: 15px;
-            font-size: 18px;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #4a5568;
-            font-weight: 500;
-        }
-        
-        .form-group input,
-        .form-group select {
-            width: 100%;
-            padding: 10px;
-            border: 2px solid #e2e8f0;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        
-        .form-group input:focus,
-        .form-group select:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        .orderbook {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .orderbook-side {
-            flex: 1;
-        }
-        
-        .orderbook-side h3 {
-            font-size: 14px;
-            margin-bottom: 10px;
-            color: #4a5568;
-        }
-        
-        .orderbook-level {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px;
-            border-radius: 5px;
-            font-size: 13px;
-            font-family: monospace;
-        }
-        
-        .ask-level {
-            background: #fed7d7;
-            color: #c53030;
-        }
-        
-        .bid-level {
-            background: #c6f6d5;
-            color: #22543d;
-        }
-        
-        .trades-list {
-            max-height: 300px;
-            overflow-y: auto;
-        }
-        
-        .trade-item {
-            padding: 10px;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 13px;
-        }
-        
-        .trade-buy {
-            border-left: 3px solid #48bb78;
-        }
-        
-        .trade-sell {
-            border-left: 3px solid #f56565;
-        }
-        
-        .status {
-            display: inline-block;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-        }
-        
-        .status-connected {
-            background: #c6f6d5;
-            color: #22543d;
-        }
-        
-        .status-disconnected {
-            background: #fed7d7;
-            color: #c53030;
-        }
-        
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-        }
-        
-        .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        
-        .stat-label {
-            font-size: 12px;
-            opacity: 0.9;
-        }
-        
-        .chart-container {
-            height: 200px;
-            background: #f7fafc;
-            border-radius: 5px;
-            padding: 10px;
-            margin-top: 15px;
+            justify-content: center;
+            font-size: 1.5rem;
+            color: #4b5563; /* gray-600 */
+            background: repeating-linear-gradient(
+                45deg,
+                #1f2937,
+                #1f2937 10px,
+                #1e2836 10px,
+                #1e2836 20px
+            );
+            border: 1px dashed #374151; /* gray-700 */
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🚀 Matching Engine - Trading Dashboard</h1>
-            <div class="api-key-section">
-                <button class="btn btn-primary" onclick="connect()">Connect</button>
-                <span class="status status-disconnected" id="status">Disconnected</span>
-            </div>
-        </div>
+
+<body class="bg-gray-900 text-gray-300 font-sans text-xs">
+
+    <!-- Main Container -->
+    <div class="flex flex-col h-screen">
         
-        <div class="grid">
-            <!-- Left Panel - Order Form -->
-            <div class="panel">
-                <h2>📝 New Order</h2>
-                <div class="form-group">
-                    <label>Symbol</label>
-                    <select id="symbol">
-                        <option>BTC-USDT</option>
-                        <option>ETH-USDT</option>
-                        <option>SOL-USDT</option>
-                    </select>
+        <!-- Header -->
+        <header class="flex-shrink-0 bg-gray-800 border-b border-gray-700">
+            <div class="h-14 flex items-center justify-between px-4">
+                <!-- Left: Logo & Symbol -->
+                <div class="flex items-center space-x-6">
+                    <h1 class="text-xl font-bold text-white">Matching Engine</h1>
+                    <div class="relative">
+                        <select id="symbol-select"
+                            class="appearance-none w-full bg-gray-700 border border-gray-600 text-white pl-3 pr-8 py-1.5 rounded-md text-sm font-medium focus:outline-none focus:border-blue-500">
+                            <option>BTC-USDT</option>
+                            <option>ETH-USDT</option>
+                            <option>SOL-USDT</option>
+                        </select>
+                        <div
+                            class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-400">
+                            <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                        </div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Order Type</label>
-                    <select id="orderType" onchange="togglePriceField()">
-                        <option value="limit">Limit</option>
-                        <option value="market">Market</option>
-                        <option value="ioc">IOC</option>
-                        <option value="fok">FOK</option>
-                        <option value="stop_loss">Stop Loss</option>
-                        <option value="stop_limit">Stop Limit</option>
-                    </select>
+
+                <!-- Middle: 24h Stats (Mocked) -->
+                <div class="flex items-center space-x-6 text-xs">
+                    <div>
+                        <span class="text-gray-400">24h Change</span>
+                        <div class="text-green-500 font-medium">+2.15%</div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">24h High</span>
+                        <div class="text-white font-medium">51,420.69</div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">24h Low</span>
+                        <div class="text-white font-medium">49,801.32</div>
+                    </div>
+                    <div>
+                        <span class="text-gray-400">24h Volume (BTC)</span>
+                        <div class="text-white font-medium">2,345.67</div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Side</label>
-                    <select id="side">
-                        <option value="buy" style="color: #22543d">Buy</option>
-                        <option value="sell" style="color: #c53030">Sell</option>
-                    </select>
+
+                <!-- Right: Connection Status -->
+                <div id="status-indicator" class="flex items-center space-x-2">
+                    <div class="w-3 h-3 rounded-full bg-gray-500 animate-pulse" id="status-dot"></div>
+                    <span class="text-xs font-medium text-gray-400" id="status-text">Connecting...</span>
                 </div>
-                <div class="form-group">
-                    <label>Quantity</label>
-                    <input type="number" id="quantity" step="0.01" value="1.0" />
-                </div>
-                <div class="form-group" id="priceGroup">
-                    <label>Price</label>
-                    <input type="number" id="price" step="0.01" value="50000" />
-                </div>
-                <button class="btn btn-success" onclick="submitOrder()" style="width: 100%">
-                    Submit Order
-                </button>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <main class="flex-1 grid grid-cols-12 gap-2 p-2 min-h-0">
+
+            <!-- Left Panel (Chart & Order Form) -->
+            <div class="col-span-12 lg:col-span-7 xl:col-span-7 flex flex-col gap-2">
                 
-                <div class="stats-grid" style="margin-top: 20px">
-                    <div class="stat-card">
-                        <div class="stat-value" id="totalOrders">0</div>
-                        <div class="stat-label">Total Orders</div>
+                <!-- Chart Panel -->
+                <div class="flex-1 bg-gray-800 rounded shadow-lg chart-placeholder">
+                    Trading Chart Placeholder
+                </div>
+                
+                <!-- Order Form Panel -->
+                <div class="flex-shrink-0 bg-gray-800 rounded shadow-lg p-4">
+                    <form id="order-form" class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                        
+                        <!-- Col 1: Order Config -->
+                        <div>
+                            <div class="grid grid-cols-3 gap-2 mb-4">
+                                <button type="button" data-order-type="limit"
+                                    class="order-type-btn bg-blue-600 text-white rounded px-3 py-2 text-xs font-medium">Limit</button>
+                                <button type="button" data-order-type="market"
+                                    class="order-type-btn bg-gray-700 hover:bg-gray-600 text-gray-300 rounded px-3 py-2 text-xs font-medium">Market</button>
+                                <button type="button" data-order-type="stop"
+                                    class="order-type-btn bg-gray-700 hover:bg-gray-600 text-gray-300 rounded px-3 py-2 text-xs font-medium">Stop</button>
+                            </div>
+                            
+                            <div class="form-group" id="tif-group">
+                                <label for="time-in-force" class="block text-xs font-medium text-gray-400 mb-1.5">Time in Force</label>
+                                <select id="time-in-force" name="time-in-force"
+                                    class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-white text-xs focus:outline-none focus:border-blue-500">
+                                    <option value="limit">Good 'Til Canceled (GTC)</option>
+                                    <option value="ioc">Immediate or Cancel (IOC)</option>
+                                    <option value="fok">Fill or Kill (FOK)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group hidden" id="trigger-price-group">
+                                <label for="trigger-price"
+                                    class="block text-xs font-medium text-gray-400 mb-1.5">Trigger Price (USDT)</label>
+                                <input type="number" id="trigger-price" name="trigger-price" placeholder="0.00"
+                                    class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-white text-xs focus:outline-none focus:border-blue-500"
+                                    step="0.01">
+                            </div>
+
+                            <div class="form-group items-center hidden" id="stop-limit-group">
+                                <input type="checkbox" id="stop-limit-check"
+                                    class="h-4 w-4 bg-gray-700 border-gray-600 rounded text-blue-500 focus:ring-blue-500">
+                                <label for="stop-limit-check" class="ml-2 text-sm text-gray-300">Stop Limit</label>
+                            </div>
+                        </div>
+
+                        <!-- Col 2: Inputs & Submit -->
+                        <div>
+                             <div class="grid grid-cols-2 gap-2 mb-4">
+                                <button type="button" data-side="buy"
+                                    class="side-btn bg-green-700 text-white rounded px-3 py-2 text-xs font-medium">Buy</button>
+                                <button type="button" data-side="sell"
+                                    class="side-btn bg-gray-700 hover:bg-gray-600 text-gray-300 rounded px-3 py-2 text-xs font-medium">Sell</button>
+                            </div>
+
+                            <div class="form-group" id="price-group">
+                                <label for="price" class="block text-xs font-medium text-gray-400 mb-1.5">Price (USDT)</label>
+                                <input type="number" id="price" name="price" placeholder="0.00"
+                                    class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-white text-xs focus:outline-none focus:border-blue-500"
+                                    step="0.01">
+                            </div>
+
+                            <div class="form-group hidden" id="limit-price-group">
+                                <label for="limit-price" class="block text-xs font-medium text-gray-400 mb-1.5">Limit
+                                    Price (USDT)</label>
+                                <input type="number" id="limit-price" name="limit-price" placeholder="0.00"
+                                    class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-white text-xs focus:outline-none focus:border-blue-500"
+                                    step="0.01">
+                            </div>
+                            
+                            <div class="form-group mt-4">
+                                <label for="quantity" class="block text-xs font-medium text-gray-400 mb-1.5">Quantity
+                                    (BTC)</label>
+                                <input type="number" id="quantity" name="quantity" placeholder="0.000"
+                                    class="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-2 text-white text-xs focus:outline-none focus:border-blue-500"
+                                    step="0.001">
+                            </div>
+
+                            <button type="submit" id="submit-btn"
+                                class="w-full mt-4 bg-green-600 hover:bg-green-700 text-white rounded-md px-3 py-2.5 text-sm font-semibold shadow-sm transition-colors">
+                                Buy BTC
+                            </button>
+                        </div>
+                    </form>
+                    <div id="order-status" class="text-center text-xs mt-3">&nbsp;</div>
+                </div>
+            </div>
+
+            <!-- Middle Panel (Order Book) -->
+            <div class="col-span-12 lg:col-span-2 xl:col-span-2 flex flex-col">
+                <div class="bg-gray-800 rounded shadow-lg flex-1 flex flex-col min-h-0">
+                    <h2 class="text-sm font-semibold text-white p-3 border-b border-gray-700">Order Book</h2>
+                    
+                    <!-- Table Header -->
+                    <div class="px-3 pt-2">
+                        <table class="w-full text-xs text-gray-400">
+                            <thead>
+                                <tr class="text-left">
+                                    <th class="font-medium w-1/3">Price</th>
+                                    <th class="font-medium w-1/3 text-right">Quantity</th>
+                                    <th class="font-medium w-1/3 text-right">Total</th>
+                                </tr>
+                            </thead>
+                        </table>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="totalTrades">0</div>
-                        <div class="stat-label">Total Trades</div>
+                    
+                    <!-- Asks (Sell Orders) -->
+                    <div id="asks-list" class="flex-1 overflow-y-auto px-3 text-xs font-mono flex flex-col-reverse">
+                        <!-- Asks content injected by JS -->
+                    </div>
+                    
+                    <!-- Spread -->
+                    <div class="px-3 py-2 border-y border-gray-700 my-1">
+                        <div class="flex items-center justify-center">
+                            <span class="text-lg font-semibold text-white" id="spread-price">0.00</span>
+                            <span class="text-xs text-gray-400 ml-2" id="spread-percent">(0.00%)</span>
+                        </div>
+                    </div>
+
+                    <!-- Bids (Buy Orders) -->
+                    <div id="bids-list" class="flex-1 overflow-y-auto px-3 text-xs font-mono">
+                        <!-- Bids content injected by JS -->
                     </div>
                 </div>
             </div>
             
-            <!-- Middle Panel - Order Book -->
-            <div class="panel">
-                <h2>📊 Order Book - <span id="currentSymbol">BTC-USDT</span></h2>
-                <div class="orderbook">
-                    <div class="orderbook-side">
-                        <h3>ASKS (Sell Orders)</h3>
-                        <div id="asks"></div>
+            <!-- Right Panel (Trade Feed & My Orders) -->
+            <div class="col-span-12 lg:col-span-3 xl:col-span-3 flex flex-col gap-2">
+                
+                <!-- Trade Feed Panel -->
+                <div class="bg-gray-800 rounded shadow-lg flex-1 flex flex-col min-h-0 h-1/2">
+                    <h2 class="text-sm font-semibold text-white p-3 border-b border-gray-700">Recent Trades</h2>
+                    <!-- Table Header -->
+                    <div class="px-3 pt-2">
+                        <table class="w-full text-xs text-gray-400">
+                            <thead>
+                                <tr class="text-left">
+                                    <th class="font-medium w-1/3">Price</th>
+                                    <th class="font-medium w-1/3 text-right">Quantity</th>
+                                    <th class="font-medium w-1/3 text-right">Time</th>
+                                </tr>
+                            </thead>
+                        </table>
                     </div>
-                    <div style="text-align: center; padding: 10px; background: #edf2f7; border-radius: 5px; margin: 10px 0">
-                        <strong>Spread:</strong> <span id="spread">-</span>
-                    </div>
-                    <div class="orderbook-side">
-                        <h3>BIDS (Buy Orders)</h3>
-                        <div id="bids"></div>
+                    <!-- Trades List -->
+                    <div class="flex-1 overflow-y-auto px-3 pt-1">
+                        <table class="w-full text-xs text-left font-mono">
+                            <tbody id="trades-list">
+                                <!-- Trades content injected by JS -->
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-            </div>
-            
-            <!-- Right Panel - Recent Trades -->
-            <div class="panel">
-                <h2>💰 Recent Trades</h2>
-                <div class="trades-list" id="tradesList">
-                    <p style="text-align: center; color: #a0aec0; padding: 20px">
-                        No trades yet
-                    </p>
+                
+                <!-- My Orders Panel -->
+                <div class="bg-gray-800 rounded shadow-lg flex-1 flex flex-col min-h-0 h-1/2">
+                    <!-- Tab Headers -->
+                    <div class="flex border-b border-gray-700">
+                        <button class="flex-1 p-3 text-sm font-semibold text-white border-b-2 border-blue-500">Open Orders</button>
+                        <button class="flex-1 p-3 text-sm font-medium text-gray-400 hover:text-white">Order History</button>
+                        <button class="flex-1 p-3 text-sm font-medium text-gray-400 hover:text-white">Trade History</button>
+                    </div>
+                    
+                    <!-- Tab Content -->
+                    <div class="flex-1 overflow-y-auto p-3">
+                        <table class="w-full text-xs text-left">
+                            <thead class="text-gray-400">
+                                <tr>
+                                    <th class="font-medium pb-2">Side/Type</th>
+                                    <th class="font-medium pb-2">Price</th>
+                                    <th class="font-medium pb-2">Qty</th>
+                                    <th class="font-medium pb-2"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="open-orders-list">
+                                <tr id="no-open-orders">
+                                    <td colspan="4" class="text-center text-gray-500 pt-4">No open orders</td>
+                                 </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
             </div>
-        </div>
+
+        </main>
     </div>
-    
+
     <script>
+        // ==============================================
+        // Configuration
+        // ==============================================
+        const API_URL = 'http://localhost:8080';
+        const WS_URL = 'ws://localhost:9002';
+        const MAX_ORDER_BOOK_LEVELS = 12;
+        const MAX_TRADES = 30;
+
+        // ==============================================
+        // State
+        // ==============================================
         let ws = null;
-        let baseUrl = 'http://localhost:8080';
-        let wsUrl = 'ws://localhost:9002';
-        
-        function connect() {
-            // Test HTTP connection
-            fetch(baseUrl + '/health')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('status').textContent = 'Connected';
-                    document.getElementById('status').className = 'status status-connected';
-                    connectWebSocket();
-                    loadOrderBook();
-                    loadStats();
-                })
-                .catch(err => {
-                    alert('Failed to connect: ' + err.message);
-                });
+        let currentOrderType = 'limit';
+        let currentSide = 'buy';
+        let currentSymbol = 'BTC-USDT';
+        let openOrders = new Map(); // Store open orders by ID
+
+        // ==============================================
+        // DOM Elements
+        // ==============================================
+        let dom = null;
+
+        // ==============================================
+        // Core Functions
+        // ==============================================
+
+        function initializeApp() {
+            console.log('DOM fully loaded. Initializing app...');
+
+            dom = {
+                statusDot: document.getElementById('status-dot'),
+                statusText: document.getElementById('status-text'),
+                symbolSelect: document.getElementById('symbol-select'),
+                orderForm: document.getElementById('order-form'),
+                orderTypeBtns: document.querySelectorAll('.order-type-btn'),
+                sideBtns: document.querySelectorAll('.side-btn'),
+                tifGroup: document.getElementById('tif-group'),
+                tifSelect: document.getElementById('time-in-force'),
+                priceGroup: document.getElementById('price-group'),
+                priceInput: document.getElementById('price'),
+                triggerPriceGroup: document.getElementById('trigger-price-group'),
+                triggerPriceInput: document.getElementById('trigger-price'),
+                stopLimitGroup: document.getElementById('stop-limit-group'),
+                stopLimitCheck: document.getElementById('stop-limit-check'),
+                limitPriceGroup: document.getElementById('limit-price-group'),
+                limitPriceInput: document.getElementById('limit-price'),
+                quantityInput: document.getElementById('quantity'),
+                submitBtn: document.getElementById('submit-btn'),
+                orderStatus: document.getElementById('order-status'),
+                bidsList: document.getElementById('bids-list'),
+                asksList: document.getElementById('asks-list'),
+                spreadPrice: document.getElementById('spread-price'),
+                spreadPercent: document.getElementById('spread-percent'),
+                tradesList: document.getElementById('trades-list'),
+                statTotalOrders: document.getElementById('stat-total-orders'),
+                statTotalTrades: document.getElementById('stat-total-trades'),
+                statWsClients: document.getElementById('stat-ws-clients'),
+                openOrdersList: document.getElementById('open-orders-list'),
+                noOpenOrdersRow: document.getElementById('no-open-orders'),
+            };
+
+            // Check if scripts loaded correctly
+            connectWebSocket();
+            fetchStats();
+            fetchOrderBook();
+            setupEventListeners();
+            lucide.createIcons();
         }
-        
+
+        function setupEventListeners() {
+            dom.orderTypeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    currentOrderType = btn.dataset.orderType;
+                    updateOrderFormUI();
+                });
+            });
+
+            dom.sideBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    currentSide = btn.dataset.side;
+                    updateOrderFormUI();
+                });
+            });
+
+            dom.stopLimitCheck.addEventListener('change', updateOrderFormUI);
+            dom.orderForm.addEventListener('submit', handleSubmit);
+            dom.symbolSelect.addEventListener('change', (e) => {
+                currentSymbol = e.target.value;
+                dom.bidsList.innerHTML = '';
+                dom.asksList.innerHTML = '';
+                dom.tradesList.innerHTML = '';
+                dom.openOrdersList.innerHTML = '';
+                openOrders.clear();
+                addNoOpenOrdersRow();
+                fetchOrderBook();
+                fetchStats();
+            });
+
+            dom.openOrdersList.addEventListener('click', (e) => {
+                const cancelBtn = e.target.closest('.cancel-order-btn');
+                if (cancelBtn) {
+                    handleCancelOrder(cancelBtn.dataset.orderId);
+                }
+            });
+        }
+
         function connectWebSocket() {
-            ws = new WebSocket(wsUrl);
-            
+            console.log(`Connecting to WebSocket at ${WS_URL}...`);
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                dom.statusDot.classList.remove('bg-gray-500', 'animate-pulse', 'bg-red-500');
+                dom.statusDot.classList.add('bg-green-500');
+                dom.statusText.textContent = 'Connected';
+            };
+
             ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                
-                if (data.type === 'trade') {
-                    addTrade(data.data);
-                } else if (data.type === 'orderbook') {
-                    updateOrderBook(data.data);
+                const message = JSON.parse(event.data);
+                if (message.type === 'trade' && message.data.symbol === currentSymbol) {
+                    renderTrade(message.data);
+                } else if (message.type === 'orderbook' && message.data.symbol === currentSymbol) {
+                    renderOrderBook(message.data.bids, message.data.asks);
                 }
             };
-            
+
             ws.onclose = () => {
-                document.getElementById('status').textContent = 'Disconnected';
-                document.getElementById('status').className = 'status status-disconnected';
+                console.log('WebSocket disconnected');
+                dom.statusDot.classList.remove('bg-green-500', 'bg-gray-500');
+                dom.statusDot.classList.add('bg-red-500');
+                dom.statusText.textContent = 'Disconnected';
+                setTimeout(connectWebSocket, 5000);
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                ws.close();
             };
         }
-        
-        function togglePriceField() {
-            const orderType = document.getElementById('orderType').value;
-            const priceGroup = document.getElementById('priceGroup');
-            priceGroup.style.display = orderType === 'market' ? 'none' : 'block';
-        }
-        
-        async function submitOrder() {
-            const order = {
-                symbol: document.getElementById('symbol').value,
-                order_type: document.getElementById('orderType').value,
-                side: document.getElementById('side').value,
-                quantity: parseFloat(document.getElementById('quantity').value)
-            };
-            
-            if (document.getElementById('orderType').value !== 'market') {
-                order.price = parseFloat(document.getElementById('price').value);
-            }
-            
+
+        async function fetchOrderBook() {
             try {
-                const response = await fetch(baseUrl + '/orders', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(order)
+                const response = await fetch(`${API_URL}/orderbook/${currentSymbol}?depth=${MAX_ORDER_BOOK_LEVELS}`);
+                if (!response.ok) throw new Error('Failed to fetch order book');
+                const data = await response.json();
+                renderOrderBook(data.bids, data.asks);
+            } catch (error) {
+                console.error('fetchOrderBook error:', error);
+            }
+        }
+
+        async function fetchStats() {
+            try {
+                const response = await fetch(`${API_URL}/stats`);
+                if (!response.ok) throw new Error('Failed to fetch stats');
+                const data = await response.json();
+                dom.statTotalOrders.textContent = data.total_orders || 0;
+                dom.statTotalTrades.textContent = data.total_trades || 0;
+                dom.statWsClients.textContent = data.ws_clients || 0;
+            } catch (error) {
+                console.error('fetchStats error:', error);
+            }
+        }
+
+        // ==============================================
+        // UI Rendering
+        // ==============================================
+
+        function updateOrderFormUI() {
+            dom.orderTypeBtns.forEach(btn => {
+                btn.classList.toggle('bg-blue-600', btn.dataset.orderType === currentOrderType);
+                btn.classList.toggle('text-white', btn.dataset.orderType === currentOrderType);
+                btn.classList.toggle('bg-gray-700', btn.dataset.orderType !== currentOrderType);
+                btn.classList.toggle('text-gray-300', btn.dataset.orderType !== currentOrderType);
+            });
+            dom.sideBtns.forEach(btn => {
+                const isBuy = btn.dataset.side === 'buy';
+                const isActive = btn.dataset.side === currentSide;
+                btn.classList.toggle(isBuy ? 'bg-green-700' : 'bg-red-700', isActive);
+                btn.classList.toggle('text-white', isActive);
+                btn.classList.toggle('bg-gray-700', !isActive);
+                btn.classList.toggle('text-gray-300', !isActive);
+                btn.classList.toggle(isBuy ? 'hover:bg-green-600' : 'hover:bg-red-600', !isActive);
+            });
+
+            if (currentSide === 'buy') {
+                dom.submitBtn.textContent = `Buy ${currentSymbol.split('-')[0]}`;
+                dom.submitBtn.className = "w-full mt-4 bg-green-600 hover:bg-green-700 text-white rounded-md px-3 py-2.5 text-sm font-semibold shadow-sm transition-colors";
+            } else {
+                dom.submitBtn.textContent = `Sell ${currentSymbol.split('-')[0]}`;
+                dom.submitBtn.className = "w-full mt-4 bg-red-600 hover:bg-red-700 text-white rounded-md px-3 py-2.5 text-sm font-semibold shadow-sm transition-colors";
+            }
+
+            const isLimit = currentOrderType === 'limit';
+            const isStop = currentOrderType === 'stop';
+            const isMarket = currentOrderType === 'market';
+            const isStopLimit = isStop && dom.stopLimitCheck.checked;
+
+            dom.tifGroup.classList.toggle('hidden', !isLimit);
+            dom.priceGroup.classList.toggle('hidden', isMarket || isStop);
+            dom.triggerPriceGroup.classList.toggle('hidden', !isStop);
+            dom.stopLimitGroup.classList.toggle('hidden', !isStop);
+            dom.stopLimitGroup.classList.toggle('flex', isStop);
+            dom.limitPriceGroup.classList.toggle('hidden', !isStopLimit);
+        }
+
+        function renderOrderBook(bids, asks) {
+            let maxTotal = 0;
+            const processLevels = (levels) => {
+                let cumulativeTotal = 0;
+                if (!Array.isArray(levels)) levels = [];
+                return levels.map(level => {
+                    const price = level.price;
+                    const quantity = level.quantity;
+                    const total = price * quantity;
+                    cumulativeTotal += total;
+                    return { price, quantity, total, cumulativeTotal };
                 });
-                
-                const result = await response.json();
-                
-                if (response.ok) {
-                    alert('Order submitted successfully!\nOrder ID: ' + result.order.order_id);
-                    loadOrderBook();
-                    loadStats();
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (err) {
-                alert('Failed to submit order: ' + err.message);
+            };
+
+            const processedBids = processLevels(bids).slice(0, MAX_ORDER_BOOK_LEVELS);
+            const processedAsks = processLevels(asks).slice(0, MAX_ORDER_BOOK_LEVELS);
+
+            const maxBidTotal = processedBids.length > 0 ? processedBids[processedBids.length - 1].cumulativeTotal : 0;
+            const maxAskTotal = processedAsks.length > 0 ? processedAsks[processedAsks.length - 1].cumulativeTotal : 0;
+            maxTotal = Math.max(maxBidTotal, maxAskTotal);
+
+            dom.asksList.innerHTML = processedAsks.map(a => {
+                const depthPercent = maxTotal > 0 ? (a.cumulativeTotal / maxTotal) * 100 : 0;
+                return `
+                <div class="relative flex justify-between py-0.5 cursor-pointer"
+                     onclick="setPriceAndQty(${a.price.toFixed(2)}, ${a.quantity.toFixed(6)})">
+                    <span class="depth-bar depth-bar-ask" style="width: ${depthPercent}%;"></span>
+                    <span class="z-10 text-red-500 w-1/3">${a.price.toFixed(2)}</span>
+                    <span class="z-10 w-1/3 text-right">${a.quantity.toFixed(6)}</span>
+                    <span class="z-10 w-1/3 text-right text-gray-400">${a.total.toFixed(0)}</span>
+                </div>`;
+            }).reverse().join('');
+
+            dom.bidsList.innerHTML = processedBids.map(b => {
+                const depthPercent = maxTotal > 0 ? (b.cumulativeTotal / maxTotal) * 100 : 0;
+                return `
+                <div class="relative flex justify-between py-0.5 cursor-pointer"
+                     onclick="setPriceAndQty(${b.price.toFixed(2)}, ${b.quantity.toFixed(6)})">
+                    <span class="depth-bar depth-bar-bid" style="width: ${depthPercent}%;"></span>
+                    <span class="z-10 text-green-500 w-1/3">${b.price.toFixed(2)}</span>
+                    <span class="z-10 w-1/3 text-right">${b.quantity.toFixed(6)}</span>
+                    <span class="z-10 w-1/3 text-right text-gray-400">${b.total.toFixed(0)}</span>
+                </div>`;
+            }).join('');
+
+            const bestBid = processedBids[0]?.price;
+            const bestAsk = processedAsks.length > 0 ? processedAsks[processedAsks.length - 1].price : null;
+            if (bestBid && bestAsk) {
+                const spreadVal = bestAsk - bestBid;
+                const spreadPct = (spreadVal / bestAsk) * 100;
+                dom.spreadPrice.textContent = spreadVal.toFixed(2);
+                dom.spreadPercent.textContent = `(${spreadPct.toFixed(2)}%)`;
+            } else {
+                dom.spreadPrice.textContent = '---';
+                dom.spreadPercent.textContent = '';
             }
         }
-        
-        async function loadOrderBook() {
-            const symbol = document.getElementById('symbol').value;
-            
-            try {
-                const response = await fetch(baseUrl + '/orderbook/' + symbol + '?depth=10');
-                
-                const data = await response.json();
-                updateOrderBook({symbol, bids: data.bids, asks: data.asks});
-                
-                if (data.spread !== null) {
-                    document.getElementById('spread').textContent = ' + data.spread.toFixed(2) + ';
-                }
-            } catch (err) {
-                console.error('Failed to load order book:', err);
-            }
-        }
-        
-        function updateOrderBook(data) {
-            const asksDiv = document.getElementById('asks');
-            const bidsDiv = document.getElementById('bids');
-            
-            asksDiv.innerHTML = '';
-            bidsDiv.innerHTML = '';
-            
-            // Asks (reverse to show highest at bottom)
-            data.asks.slice(0, 10).reverse().forEach(level => {
-                const div = document.createElement('div');
-                div.className = 'orderbook-level ask-level';
-                div.innerHTML = `
-                    <span>${level.price.toFixed(2)}</span>
-                    <span>${level.quantity.toFixed(4)}</span>
-                `;
-                asksDiv.appendChild(div);
-            });
-            
-            // Bids
-            data.bids.slice(0, 10).forEach(level => {
-                const div = document.createElement('div');
-                div.className = 'orderbook-level bid-level';
-                div.innerHTML = `
-                    <span>${level.price.toFixed(2)}</span>
-                    <span>${level.quantity.toFixed(4)}</span>
-                `;
-                bidsDiv.appendChild(div);
-            });
-        }
-        
-        function addTrade(trade) {
-            const tradesList = document.getElementById('tradesList');
-            
-            if (tradesList.querySelector('p')) {
-                tradesList.innerHTML = '';
-            }
-            
-            const div = document.createElement('div');
-            div.className = 'trade-item trade-' + trade.aggressor_side;
-            div.innerHTML = `
-                <strong>${trade.symbol}</strong><br>
-                Price: ${(trade.price / 100).toFixed(2)}<br>
-                Qty: ${(trade.quantity / 1000000).toFixed(4)}<br>
-                Side: <strong>${trade.aggressor_side.toUpperCase()}</strong><br>
-                <small>${new Date(trade.timestamp).toLocaleTimeString()}</small>
+
+        function renderTrade(trade) {
+            const price = trade.price;
+            const quantity = trade.quantity;
+            const isBuy = trade.aggressor_side === 'buy';
+            const colorClass = isBuy ? 'text-green-500' : 'text-red-500';
+            const time = new Date(trade.timestamp).toLocaleTimeString();
+
+            const tradeRow = document.createElement('tr');
+            tradeRow.innerHTML = `
+                <td class="${colorClass} w-1/3 py-0.5">${price.toFixed(2)}</td>
+                <td class="w-1/3 text-right py-0.5">${quantity.toFixed(6)}</td>
+                <td class="w-1/3 text-right text-gray-500 py-0.5">${time}</td>
             `;
-            
-            tradesList.insertBefore(div, tradesList.firstChild);
-            
-            // Keep only last 20 trades
-            while (tradesList.children.length > 20) {
-                tradesList.removeChild(tradesList.lastChild);
+            dom.tradesList.prepend(tradeRow);
+            if (dom.tradesList.children.length > MAX_TRADES) {
+                dom.tradesList.removeChild(dom.tradesList.lastChild);
             }
         }
-        
-        async function loadStats() {
+
+        function renderOpenOrder(order) {
+            if (dom.noOpenOrdersRow) {
+                dom.noOpenOrdersRow.remove();
+                dom.noOpenOrdersRow = null;
+            }
+            const existingRow = document.getElementById(`order-${order.id}`);
+            if (existingRow) existingRow.remove();
+
+            const isBuy = order.side === 'buy';
+            const colorClass = isBuy ? 'text-green-500' : 'text-red-500';
+            let type = '';
+            let price = '--';
+
+            if (order.order_type === 'limit' || order.order_type === 'ioc' || order.order_type === 'fok') {
+                type = order.order_type.toUpperCase();
+                price = order.price.toFixed(2);
+            } else if (order.order_type === 'stop_loss') {
+                type = `Stop (${order.trigger_price.toFixed(2)})`;
+            } else if (order.order_type === 'stop_limit') {
+                type = `Stop Lmt (${order.trigger_price.toFixed(2)})`;
+                price = order.price.toFixed(2);
+            }
+
+            const orderRow = document.createElement('tr');
+            orderRow.id = `order-${order.id}`;
+            orderRow.innerHTML = `
+                <td class="py-1">
+                    <div class="${colorClass} font-medium">${isBuy ? 'Buy' : 'Sell'}</div>
+                    <div class="text-gray-400">${type}</div>
+                </td>
+                <td class="py-1">${price}</td>
+                <td class="py-1">${order.quantity.toFixed(6)}</td>
+                <td class="py-1 text-right">
+                    <button class="cancel-order-btn text-gray-500 hover:text-red-500" data-order-id="${order.id}">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </td>
+            `;
+            dom.openOrdersList.prepend(orderRow);
+            lucide.createIcons({ nodes: [orderRow.querySelector('button')] });
+        }
+
+        function removeOpenOrder(orderId) {
+            const row = document.getElementById(`order-${orderId}`);
+            if (row) row.remove();
+            openOrders.delete(orderId);
+            if (openOrders.size === 0) addNoOpenOrdersRow();
+        }
+
+        function addNoOpenOrdersRow() {
+            if (dom.openOrdersList.children.length === 0) {
+                const row = document.createElement('tr');
+                row.id = 'no-open-orders';
+                row.innerHTML = `<td colspan="4" class="text-center text-gray-500 pt-4">No open orders</td>`;
+                dom.openOrdersList.appendChild(row);
+                dom.noOpenOrdersRow = row;
+            }
+        }
+
+        function setPriceAndQty(price, quantity) {
+            if (currentOrderType === 'limit') {
+                dom.priceInput.value = price;
+            } else if (currentOrderType === 'stop') {
+                dom.triggerPriceInput.value = price;
+            }
+        }
+
+        // ==============================================
+        // Event Handlers
+        // ==============================================
+
+        async function handleSubmit(e) {
+            e.preventDefault();
+            let endpoint = `${API_URL}/orders`;
+            let payload = {
+                symbol: currentSymbol,
+                order_type: currentOrderType,
+                side: currentSide,
+                quantity: parseFloat(dom.quantityInput.value)
+            };
+
+            if (currentOrderType === 'limit') {
+                payload.order_type = dom.tifSelect.value; // "limit", "ioc", or "fok"
+                payload.price = parseFloat(dom.priceInput.value);
+            } else if (currentOrderType === 'market') {
+                // Market order
+            } else if (currentOrderType === 'stop') {
+                endpoint = `${API_URL}/orders/stop`;
+                payload.trigger_price = parseFloat(dom.triggerPriceInput.value);
+                payload.stop_type = dom.stopLimitCheck.checked ? 'stop_limit' : 'stop_loss';
+                if (dom.stopLimitCheck.checked) {
+                    payload.limit_price = parseFloat(dom.limitPriceInput.value);
+                }
+                delete payload.order_type;
+            }
+
+            // Validation
+            if (!payload.quantity || payload.quantity <= 0) {
+                return showOrderStatus('Quantity must be positive', true);
+            }
+            const hasLimitPrice = currentOrderType === 'limit';
+            const hasStopLimitPrice = currentOrderType === 'stop' && dom.stopLimitCheck.checked;
+            const hasTriggerPrice = currentOrderType === 'stop';
+            if (hasLimitPrice && (!payload.price || payload.price <= 0)) {
+                return showOrderStatus('Price must be positive', true);
+            }
+            if (hasStopLimitPrice && (!payload.limit_price || payload.limit_price <= 0)) {
+                return showOrderStatus('Limit Price must be positive', true);
+            }
+            if (hasTriggerPrice && (!payload.trigger_price || payload.trigger_price <= 0)) {
+                return showOrderStatus('Trigger Price must be positive', true);
+            }
+
+            showOrderStatus('Submitting...', false);
             try {
-                const response = await fetch(baseUrl + '/stats');
-                
-                const data = await response.json();
-                
-                document.getElementById('totalOrders').textContent = data.total_orders || 0;
-                document.getElementById('totalTrades').textContent = data.total_trades || 0;
-            } catch (err) {
-                console.error('Failed to load stats:', err);
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Submission failed');
+                console.log('Order submission result:', result);
+
+                let orderId, status;
+                if (currentOrderType === 'stop') {
+                    orderId = result.stop_order_id;
+                    status = result.status;
+                    if (status === 'accepted') {
+                        const order = {
+                            id: orderId,
+                            side: payload.side,
+                            order_type: payload.stop_type,
+                            price: payload.limit_price || 0,
+                            trigger_price: payload.trigger_price,
+                            quantity: payload.quantity
+                        };
+                        openOrders.set(orderId, order);
+                        renderOpenOrder(order);
+                        showOrderStatus('Stop order accepted', false);
+                    }
+                } else {
+                    orderId = result.order.id;
+                    status = result.order.status;
+                    if (status === 'open' || status === 'partially_filled') {
+                        const order = {
+                            id: orderId,
+                            side: result.order.side,
+                            order_type: result.order.order_type,
+                            price: result.order.price / 100.0,
+                            trigger_price: 0,
+                            quantity: result.remaining_quantity / 1000000.0
+                        };
+                        openOrders.set(orderId, order);
+                        renderOpenOrder(order);
+                        showOrderStatus('Order placed', false);
+                    } else if (status === 'filled') {
+                        showOrderStatus('Order filled', false);
+                    } else {
+                        showOrderStatus('Order cancelled', false);
+                    }
+                }
+                dom.priceInput.value = '';
+                dom.quantityInput.value = '';
+                dom.triggerPriceInput.value = '';
+                dom.limitPriceInput.value = '';
+                fetchStats();
+                fetchOrderBook();
+            } catch (error) {
+                console.error('Order submission error:', error);
+                showOrderStatus(error.message, true);
             }
         }
-        
-        // Auto-refresh order book every 2 seconds
-        setInterval(() => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                loadOrderBook();
-                loadStats();
+
+        async function handleCancelOrder(orderId) {
+            console.log(`Cancelling order ${orderId}...`);
+            try {
+                const response = await fetch(`${API_URL}/orders/${orderId}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || 'Cancel failed');
+                console.log('Cancel result:', result);
+                if (result.cancelled) {
+                    removeOpenOrder(orderId);
+                    showOrderStatus('Order cancelled', false);
+                } else {
+                    showOrderStatus('Cancel failed', true);
+                }
+            } catch (error) {
+                console.error('Cancel order error:', error);
+                showOrderStatus(error.message, true);
             }
-        }, 2000);
+        }
+
+        function showOrderStatus(message, isError) {
+            dom.orderStatus.textContent = message;
+            dom.orderStatus.className = isError ? 'text-center text-xs mt-3 text-red-400' : 'text-center text-xs mt-3 text-green-400';
+            setTimeout(() => {
+                dom.orderStatus.innerHTML = '&nbsp;';
+            }, 3000);
+        }
+
+        // ==============================================
+        // Start
+        // ==============================================
+        document.addEventListener('DOMContentLoaded', initializeApp);
     </script>
 </body>
+
 </html>
+

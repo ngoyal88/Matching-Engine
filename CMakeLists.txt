@@ -23,6 +23,8 @@ add_executable(matching_engine
     src/wal.cpp
     src/wal_integration.cpp
     src/ws_server.cpp
+    src/stop_order_manager.cpp
+    src/global_state.cpp
 )
 
 # Link libraries
@@ -45,6 +47,8 @@ add_executable(tests
     src/order_book.cpp 
     src/wal.cpp 
     src/wal_integration.cpp 
+    src/stop_order_manager.cpp
+    src/global_state.cpp
 )
 
 if(WIN32)

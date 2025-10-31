@@ -1,22 +1,36 @@
 // ============================================================================
-// FILE: src/server.cpp (UPDATED with better error handling)
+// FILE: src/server.cpp (Corrected and Cleaned Version)
+// This file contains the complete, correct implementation with all features.
 // ============================================================================
 #include "../include/order.h"
 #include "../include/order_store.h"
 #include "../include/order_book.h"
 #include "../include/wal.h"
 #include "../include/ws_server.h"
+#include "../include/global_state.h"       // Use new global state
+#include "../include/stop_order_manager.h" // Use stop orders
 #include <httplib.h>
 #include "../vendor/json.hpp"
 #include <iostream>
 #include <string>
 #include <chrono>
 #include <iomanip>
-#include <unordered_map>
 #include <sstream>
 #include <ctime>
+#include <vector>
+#include <thread> // Added for detaching stop trigger checks
+
 using json = nlohmann::json;
 
+// === Forward Declarations for Helper Functions ===
+static std::string to_iso8601(const std::chrono::system_clock::time_point &tp);
+void process_trades(const std::vector<Trade>& trades);
+void check_and_process_stop_triggers(const std::string& symbol, long long last_trade_price);
+
+
+/**
+ * @brief Helper to convert system_clock::time_point to ISO 8601 string
+ */
 static std::string to_iso8601(const std::chrono::system_clock::time_point &tp) {
     auto t = std::chrono::system_clock::to_time_t(tp);
     std::ostringstream ss;
@@ -24,12 +38,99 @@ static std::string to_iso8601(const std::chrono::system_clock::time_point &tp) {
     return ss.str();
 }
 
-static std::unordered_map<std::string, OrderBook> order_books;
-static std::unordered_map<std::string, std::string> order_to_symbol;
-static std::mutex order_to_symbol_mutex;
-static std::atomic<uint64_t> total_orders{0};
-static std::atomic<uint64_t> total_trades{0};
+/**
+ * @brief Processes trades: logs to WAL and broadcasts via WebSocket.
+ * @param trades A list of trades that have just occurred.
+ */
+void process_trades(const std::vector<Trade>& trades) {
+    for (const auto &t : trades) {
+        // Log trade to WAL
+        json trade_json = {
+            {"trade_id", t.trade_id},
+            {"symbol", t.symbol},
+            {"price", t.price},
+            {"quantity", t.quantity},
+            {"aggressor_side", t.aggressor_side},
+            {"maker_order_id", t.maker_order_id},
+            {"taker_order_id", t.taker_order_id},
+            {"maker_fee", t.maker_fee},
+            {"taker_fee", t.taker_fee},
+            {"timestamp", t.timestamp_iso}
+        };
+        global_wal.append_trade(trade_json);
+        
+        // Broadcast trade via WebSocket
+        if (global_ws_server && global_ws_server->is_running()) {
+            global_ws_server->broadcast_trade(t);
+        }
+    }
+}
 
+/**
+ * @brief Checks for and processes stop orders triggered by a recent trade.
+ * @param symbol The symbol that just traded.
+ * @param last_trade_price The price of the last trade.
+ */
+void check_and_process_stop_triggers(const std::string& symbol, long long last_trade_price) {
+    auto it = g_stop_order_managers.find(symbol);
+    if (it == g_stop_order_managers.end()) {
+        return; // No stop orders for this symbol
+    }
+
+    auto& stop_manager = it->second;
+    auto triggered_orders = stop_manager.check_triggers(last_trade_price);
+
+    if (triggered_orders.empty()) {
+        return;
+    }
+
+    std::cout << "[Server] Triggered " << triggered_orders.size() 
+              << " stop orders for " << symbol << " at price " << last_trade_price << std::endl;
+
+    // Process triggered orders
+    auto& book = g_order_books.at(symbol);
+    for (auto& order : triggered_orders) {
+        // Log the triggered order to WAL
+        json order_json = {
+            {"order_id", order.order_id},
+            {"symbol", order.symbol},
+            {"order_type", order.order_type},
+            {"side", order.side},
+            {"quantity", order.quantity},
+            {"price", order.price},
+            {"timestamp_ns", order.timestamp.time_since_epoch().count()},
+            {"triggered_from_stop", true}
+        };
+        global_wal.append_order(order_json);
+        
+        // Add to order-to-symbol map
+        {
+            std::lock_guard<std::mutex> lk(g_order_to_symbol_mutex);
+            g_order_to_symbol[order.order_id] = order.symbol;
+        }
+
+        // Submit the order to the book
+        auto trades = book.add_order(order);
+        g_total_trades.fetch_add(trades.size());
+
+        // Process any resulting trades
+        if (!trades.empty()) {
+            process_trades(trades);
+        }
+    }
+
+    // After processing, broadcast an order book update
+    if (global_ws_server && global_ws_server->is_running()) {
+        auto bids = book.top_bids(10);
+        auto asks = book.top_asks(10);
+        global_ws_server->broadcast_orderbook_update(symbol, bids, asks);
+    }
+}
+
+/**
+ * @brief Main function to set up and run the HTTP server.
+ * @param port The port to listen on.
+ */
 void setup_server(int port) {
     httplib::Server svr;
 
@@ -38,6 +139,11 @@ void setup_server(int port) {
         {"Access-Control-Allow-Origin", "*"},
         {"Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"},
         {"Access-Control-Allow-Headers", "Content-Type"}
+    });
+
+    // Handle preflight OPTIONS requests for CORS
+    svr.Options("/.*", [](const httplib::Request &, httplib::Response &res) {
+        res.status = 204; // No Content
     });
 
     // Health check
@@ -53,24 +159,22 @@ void setup_server(int port) {
     // Get available symbols
     svr.Get("/symbols", [](const httplib::Request&, httplib::Response& res) {
         json symbols = json::array();
-        for (const auto &[symbol, book] : order_books) {
+        for (const auto &[symbol, book] : g_order_books) {
             symbols.push_back(symbol);
         }
-        
         json response = {
             {"symbols", symbols},
             {"count", symbols.size()}
         };
-        
         res.set_content(response.dump(2), "application/json");
     });
 
-    // Create order with validation
+    // Create a regular order (Limit, Market, IOC, FOK)
     svr.Post("/orders", [](const httplib::Request &req, httplib::Response &res) {
         try {
             auto j = json::parse(req.body);
             
-            // Validate required fields
+            // --- Validation ---
             std::vector<std::string> required = {"symbol", "order_type", "side", "quantity"};
             for (const auto &field : required) {
                 if (!j.contains(field)) {
@@ -80,12 +184,10 @@ void setup_server(int port) {
                     return;
                 }
             }
-
             std::string symbol = j["symbol"].get<std::string>();
             std::string order_type = j["order_type"].get<std::string>();
             std::string side = j["side"].get<std::string>();
             
-            // Validate order type
             if (order_type != "market" && order_type != "limit" && 
                 order_type != "ioc" && order_type != "fok") {
                 res.status = 400;
@@ -93,15 +195,12 @@ void setup_server(int port) {
                 res.set_content(err.dump(), "application/json");
                 return;
             }
-            
-            // Validate side
             if (side != "buy" && side != "sell") {
                 res.status = 400;
                 json err = {{"error", "invalid side. Use: buy or sell"}};
                 res.set_content(err.dump(), "application/json");
                 return;
             }
-
             double quantity_d = j["quantity"].get<double>();
             if (quantity_d <= 0.0) {
                 res.status = 400;
@@ -109,8 +208,7 @@ void setup_server(int port) {
                 res.set_content(err.dump(), "application/json");
                 return;
             }
-
-            long long quantity = static_cast<long long>(quantity_d * 1000000.0);
+            long long quantity = static_cast<long long>(quantity_d * 1000000.0); // 6 decimal places for qty
             long long price = 0;
             
             if (order_type == "limit" || order_type == "ioc" || order_type == "fok") {
@@ -127,8 +225,9 @@ void setup_server(int port) {
                     res.set_content(err.dump(), "application/json");
                     return;
                 }
-                price = static_cast<long long>(price_d * 100.0);
+                price = static_cast<long long>(price_d * 100.0); // 2 decimal places for price
             }
+            // --- End Validation ---
 
             Order o;
             o.order_id = global_order_store.next_id();
@@ -147,52 +246,43 @@ void setup_server(int port) {
                 {"side", o.side},
                 {"quantity", o.quantity},
                 {"price", o.price},
-                {"timestamp", to_iso8601(o.timestamp)}
+                {"timestamp_ns", o.timestamp.time_since_epoch().count()}
             };
             global_wal.append_order(order_json);
 
             // Track order
             {
-                std::lock_guard<std::mutex> lk(order_to_symbol_mutex);
-                order_to_symbol[o.order_id] = symbol;
+                std::lock_guard<std::mutex> lk(g_order_to_symbol_mutex);
+                g_order_to_symbol[o.order_id] = symbol;
             }
-            total_orders.fetch_add(1);
+            g_total_orders.fetch_add(1);
 
             // Match order
-            auto &book = order_books.try_emplace(symbol, symbol).first->second;
+            auto &book = g_order_books.try_emplace(symbol, symbol).first->second;
             auto trades = book.add_order(o);
-            total_trades.fetch_add(trades.size());
+            g_total_trades.fetch_add(trades.size());
 
-            // Log trades
-            for (auto &t : trades) {
-                json trade_json = {
-                    {"trade_id", t.trade_id},
-                    {"symbol", t.symbol},
-                    {"price", t.price},
-                    {"quantity", t.quantity},
-                    {"aggressor_side", t.aggressor_side},
-                    {"maker_order_id", t.maker_order_id},
-                    {"taker_order_id", t.taker_order_id},
-                    {"maker_fee", t.maker_fee},
-                    {"taker_fee", t.taker_fee},
-                    {"timestamp", t.timestamp_iso}
-                };
-                global_wal.append_trade(trade_json);
-                
-                if (global_ws_server && global_ws_server->is_running()) {
-                    global_ws_server->broadcast_trade(t);
-                }
+            // Log and broadcast trades
+            if (!trades.empty()) {
+                process_trades(trades);
             }
                 
-            //Broadcast orderbook update
+            // Broadcast orderbook update
             if (global_ws_server && global_ws_server->is_running()) {
                 auto bids = book.top_bids(10);
                 auto asks = book.top_asks(10);
                 global_ws_server->broadcast_orderbook_update(symbol, bids, asks);
             }
             
+            // Check for stop order triggers
+            if (!trades.empty()) {
+                long long last_trade_price = trades.back().price;
+                std::thread([symbol, last_trade_price]() {
+                    check_and_process_stop_triggers(symbol, last_trade_price);
+                }).detach();
+            }
 
-            // Build response
+            // --- Build Response ---
             json resp;
             resp["trades"] = json::array();
             long long filled_qty = 0;
@@ -201,8 +291,8 @@ void setup_server(int port) {
                 resp["trades"].push_back({
                     {"trade_id", t.trade_id},
                     {"symbol", t.symbol},
-                    {"price", t.price},
-                    {"quantity", t.quantity},
+                    {"price", t.price / 100.0}, // Convert back
+                    {"quantity", t.quantity / 1000000.0}, // Convert back
                     {"aggressor_side", t.aggressor_side},
                     {"maker_order_id", t.maker_order_id},
                     {"taker_order_id", t.taker_order_id},
@@ -213,36 +303,33 @@ void setup_server(int port) {
             }
             long long remaining_qty = std::max(0LL, quantity - filled_qty);
 
-            // Determine order status
             std::string status;
             if (order_type == "fok") {
                 status = (filled_qty == quantity) ? "filled" : "cancelled";
             } else if (order_type == "ioc") {
                 status = (filled_qty > 0) ? "partially_filled" : "cancelled";
             } else if (order_type == "market") {
-                if (filled_qty == 0) status = "cancelled"; // no liquidity
+                if (filled_qty == 0) status = "cancelled";
                 else if (filled_qty < quantity) status = "partially_filled";
                 else status = "filled";
             } else { // limit
-                if (remaining_qty == 0) status = "filled"; // immediate full fill
-                else if (filled_qty > 0) status = "partially_filled"; // resting remainder
+                if (remaining_qty == 0) status = "filled";
+                else if (filled_qty > 0) status = "partially_filled";
                 else status = "open";
             }
 
             resp["order"] = {
-                {"order_id", o.order_id},
+                {"id", o.order_id}, // Changed to 'id' to match frontend
                 {"symbol", o.symbol},
                 {"order_type", o.order_type},
                 {"side", o.side},
-                {"quantity", o.quantity},
-                {"price", o.price},
+                {"quantity", o.quantity / 1000000.0}, // Convert back
+                {"price", o.price / 100.0}, // Convert back
                 {"timestamp", to_iso8601(o.timestamp)},
                 {"status", status}
             };
-
-            resp["filled_quantity"] = filled_qty;
-            resp["remaining_quantity"] = remaining_qty;
-
+            resp["filled_quantity"] = filled_qty / 1000000.0; // Convert back
+            resp["remaining_quantity"] = remaining_qty / 1000000.0; // Convert back
             res.status = 200;
             res.set_content(resp.dump(2), "application/json");
 
@@ -257,16 +344,110 @@ void setup_server(int port) {
         }
     });
 
-    // Cancel order
+    // Create a Stop Order
+    svr.Post("/orders/stop", [](const httplib::Request &req, httplib::Response &res) {
+        try {
+            auto j = json::parse(req.body);
+            
+            // --- Validation ---
+            std::vector<std::string> required = {"symbol", "stop_type", "side", "quantity", "trigger_price"};
+            for (const auto &field : required) {
+                if (!j.contains(field)) {
+                    res.status = 400;
+                    json err = {{"error", "missing field: " + field}};
+                    res.set_content(err.dump(), "application/json");
+                    return;
+                }
+            }
+            std::string symbol = j["symbol"].get<std::string>();
+            std::string stop_type_str = j["stop_type"].get<std::string>();
+            std::string side = j["side"].get<std::string>();
+            if (j["quantity"].get<double>() <= 0.0 || j["trigger_price"].get<double>() <= 0.0) {
+                res.status = 400;
+                json err = {{"error", "quantity and trigger_price must be positive"}};
+                res.set_content(err.dump(), "application/json");
+                return;
+            }
+            // --- End Validation ---
+
+            StopOrder so;
+            so.symbol = symbol;
+            so.side = side;
+            so.quantity = static_cast<long long>(j["quantity"].get<double>() * 1000000.0);
+            so.trigger_price = static_cast<long long>(j["trigger_price"].get<double>() * 100.0);
+            so.created_at = std::chrono::system_clock::now();
+            so.order_id = global_order_store.next_id();
+            
+            if (stop_type_str == "stop_loss") {
+                so.stop_type = StopOrderType::STOP_LOSS;
+            } else if (stop_type_str == "stop_limit") {
+                so.stop_type = StopOrderType::STOP_LIMIT;
+                if (!j.contains("limit_price") || j["limit_price"].get<double>() <= 0.0) {
+                    res.status = 400;
+                    json err = {{"error", "stop_limit order requires a positive limit_price"}};
+                    res.set_content(err.dump(), "application/json");
+                    return;
+                }
+                so.limit_price = static_cast<long long>(j["limit_price"].get<double>() * 100.0);
+            } else {
+                res.status = 400;
+                json err = {{"error", "invalid stop_type. Use: stop_loss, stop_limit"}};
+                res.set_content(err.dump(), "application/json");
+                return;
+            }
+            
+            // Log stop order to WAL
+            json order_json = {
+                {"order_id", so.order_id},
+                {"symbol", so.symbol},
+                {"order_type", "stop"},
+                {"stop_type", stop_type_str},
+                {"side", so.side},
+                {"quantity", so.quantity},
+                {"price", 0},
+                {"trigger_price", so.trigger_price},
+                {"limit_price", so.limit_price},
+                {"timestamp_ns", so.created_at.time_since_epoch().count()}
+            };
+            global_wal.append_order(order_json);
+
+            // Track order
+            {
+                std::lock_guard<std::mutex> lk(g_order_to_symbol_mutex);
+                g_order_to_symbol[so.order_id] = symbol;
+            }
+            
+            // Add to the StopOrderManager
+            auto &stop_manager = g_stop_order_managers.try_emplace(symbol, symbol).first->second;
+            stop_manager.add_stop_order(so);
+
+            json resp = {
+                {"status", "accepted"},
+                {"stop_order_id", so.order_id},
+                {"symbol", so.symbol},
+                {"trigger_price", so.trigger_price / 100.0}, // Convert back
+                {"timestamp", to_iso8601(so.created_at)}
+            };
+            res.status = 200;
+            res.set_content(resp.dump(2), "application/json");
+
+        } catch (const std::exception &e) {
+            res.status = 500;
+            json err = {{"error", "internal error: " + std::string(e.what())}};
+            res.set_content(err.dump(), "application/json");
+        }
+    });
+
+    // Cancel an order (Limit or Stop)
     svr.Delete(R"(/orders/(.+))", [](const httplib::Request &req, httplib::Response &res) {
         try {
             std::string order_id = req.matches[1].str();
             
             std::string symbol;
             {
-                std::lock_guard<std::mutex> lk(order_to_symbol_mutex);
-                auto it = order_to_symbol.find(order_id);
-                if (it == order_to_symbol.end()) {
+                std::lock_guard<std::mutex> lk(g_order_to_symbol_mutex);
+                auto it = g_order_to_symbol.find(order_id);
+                if (it == g_order_to_symbol.end()) {
                     res.status = 404;
                     json err = {{"error", "order not found"}};
                     res.set_content(err.dump(), "application/json");
@@ -275,25 +456,32 @@ void setup_server(int port) {
                 symbol = it->second;
             }
             
-            auto book_it = order_books.find(symbol);
-            if (book_it == order_books.end()) {
-                res.status = 404;
-                json err = {{"error", "symbol not found"}};
-                res.set_content(err.dump(), "application/json");
-                return;
+            bool cancelled = false;
+            
+            // Try canceling from the main order book
+            auto book_it = g_order_books.find(symbol);
+            if (book_it != g_order_books.end()) {
+                cancelled = book_it->second.cancel_order(order_id);
             }
             
-            bool cancelled = book_it->second.cancel_order(order_id);
+            // If not found, try canceling from stop order manager
+            if (!cancelled) {
+                auto stop_it = g_stop_order_managers.find(symbol);
+                if (stop_it != g_stop_order_managers.end()) {
+                    cancelled = stop_it->second.cancel_stop_order(order_id);
+                }
+            }
             
             if (cancelled) {
                 global_wal.append_cancel(order_id, "user_request");
                 
                 {
-                    std::lock_guard<std::mutex> lk(order_to_symbol_mutex);
-                    order_to_symbol.erase(order_id);
+                    std::lock_guard<std::mutex> lk(g_order_to_symbol_mutex);
+                    g_order_to_symbol.erase(order_id);
                 }
                 
-                if (global_ws_server && global_ws_server->is_running()) {
+                // Broadcast OB update since a limit order might have been removed
+                if (book_it != g_order_books.end() && global_ws_server && global_ws_server->is_running()) {
                     auto bids = book_it->second.top_bids(10);
                     auto asks = book_it->second.top_asks(10);
                     global_ws_server->broadcast_orderbook_update(symbol, bids, asks);
@@ -308,7 +496,7 @@ void setup_server(int port) {
                 res.set_content(resp.dump(2), "application/json");
             } else {
                 res.status = 404;
-                json err = {{"error", "order not found or already filled"}};
+                json err = {{"error", "order not found or already filled/cancelled"}};
                 res.set_content(err.dump(), "application/json");
             }
             
@@ -319,7 +507,7 @@ void setup_server(int port) {
         }
     });
 
-    // View orderbook with depth parameter
+    // View orderbook
     svr.Get(R"(/orderbook/(.+))", [](const httplib::Request &req, httplib::Response &res) {
         std::string symbol = req.matches[1].str();
         
@@ -328,19 +516,24 @@ void setup_server(int port) {
             try {
                 depth = std::stoi(req.get_param_value("depth"));
                 depth = std::max(1, std::min(depth, 100));
-            } catch (...) {
-                depth = 10;
-            }
+            } catch (...) { depth = 10; }
         }
         
-        if (!order_books.count(symbol)) {
-            res.status = 404;
-            json err = {{"error", "symbol not found"}};
-            res.set_content(err.dump(), "application/json");
+        if (!g_order_books.count(symbol)) {
+            // Return empty book instead of 404, which is valid
+            json j;
+            j["symbol"] = symbol;
+            j["bids"] = json::array();
+            j["asks"] = json::array();
+            j["best_bid"] = nullptr;
+            j["best_ask"] = nullptr;
+            j["spread"] = nullptr;
+            j["timestamp"] = to_iso8601(std::chrono::system_clock::now());
+            res.set_content(j.dump(2), "application/json");
             return;
         }
 
-        auto &book = order_books.at(symbol);
+        auto &book = g_order_books.at(symbol);
         
         auto mk_levels = [](const std::vector<std::pair<long long,long long>> &lvls) {
             json arr = json::array();
@@ -352,10 +545,8 @@ void setup_server(int port) {
             }
             return arr;
         };
-
         auto bids = book.top_bids(depth);
         auto asks = book.top_asks(depth);
-
         json j;
         j["symbol"] = symbol;
         j["bids"] = mk_levels(bids);
@@ -368,7 +559,6 @@ void setup_server(int port) {
             j["spread"] = nullptr;
         }
         j["timestamp"] = to_iso8601(std::chrono::system_clock::now());
-        
         res.set_content(j.dump(2), "application/json");
     });
 
@@ -381,13 +571,10 @@ void setup_server(int port) {
             try {
                 limit = std::stoi(req.get_param_value("limit"));
                 limit = std::max(1, std::min(limit, 1000));
-            } catch (...) {
-                limit = 50;
-            }
+            } catch (...) { limit = 50; }
         }
         
         auto entries = global_wal.replay();
-        
         json trades_array = json::array();
         int count = 0;
         
@@ -396,10 +583,11 @@ void setup_server(int port) {
                 auto payload = (*it)["payload"];
                 if (payload["symbol"] == symbol) {
                     json trade_display = payload;
+                    // Convert from integer units
                     trade_display["price"] = payload["price"].get<long long>() / 100.0;
                     trade_display["quantity"] = payload["quantity"].get<long long>() / 1000000.0;
-                    trade_display["maker_fee"] = payload["maker_fee"].get<long long>() / 1000000.0;
-                    trade_display["taker_fee"] = payload["taker_fee"].get<long long>() / 1000000.0;
+                    trade_display["maker_fee"] = payload["maker_fee"].get<long long>(); // Fees are already fine
+                    trade_display["taker_fee"] = payload["taker_fee"].get<long long>();
                     trades_array.push_back(trade_display);
                     count++;
                 }
@@ -411,16 +599,15 @@ void setup_server(int port) {
             {"trades", trades_array},
             {"count", count}
         };
-        
         res.set_content(response.dump(2), "application/json");
     });
 
     // Server statistics
     svr.Get("/stats", [](const httplib::Request&, httplib::Response& res) {
         json stats = {
-            {"symbols_count", order_books.size()},
-            {"total_orders", total_orders.load()},
-            {"total_trades", total_trades.load()},
+            {"symbols_count", g_order_books.size()},
+            {"total_orders", g_total_orders.load()},
+            {"total_trades", g_total_trades.load()},
             {"wal_total_entries", global_wal.total_entries()},
             {"wal_pending_writes", global_wal.pending_writes()},
             {"ws_active", global_ws_server != nullptr && global_ws_server->is_running()},
@@ -428,7 +615,7 @@ void setup_server(int port) {
         };
         
         json symbols = json::object();
-        for (auto &[symbol, book] : order_books) {
+        for (auto &[symbol, book] : g_order_books) {
             auto bids = book.top_bids(1);
             auto asks = book.top_asks(1);
             
@@ -449,43 +636,7 @@ void setup_server(int port) {
         res.set_content(stats.dump(2), "application/json");
     });
 
-    // Batch order submission
-    svr.Post("/orders/batch", [](const httplib::Request &req, httplib::Response &res) {
-        try {
-            auto j = json::parse(req.body);
-            
-            if (!j.contains("orders") || !j["orders"].is_array()) {
-                res.status = 400;
-                json err = {{"error", "request must contain 'orders' array"}};
-                res.set_content(err.dump(), "application/json");
-                return;
-            }
-            
-            json results = json::array();
-            
-            for (auto &order_json : j["orders"]) {
-                // Reuse single order logic
-                // This is a simplified version - in production, implement proper batch processing
-                results.push_back({
-                    {"status", "pending"},
-                    {"message", "batch processing not fully implemented"}
-                });
-            }
-            
-            json response = {
-                {"processed", results.size()},
-                {"results", results}
-            };
-            
-            res.set_content(response.dump(2), "application/json");
-            
-        } catch (const std::exception &e) {
-            res.status = 500;
-            json err = {{"error", std::string(e.what())}};
-            res.set_content(err.dump(), "application/json");
-        }
-    });
-
     std::cout << "[HTTP] Server listening on port " << port << "\n";
     svr.listen("0.0.0.0", port);
 }
+

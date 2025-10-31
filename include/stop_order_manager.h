@@ -1,5 +1,5 @@
 // ============================================================================
-// FILE: include/stop_order_manager.h (NEW - Advanced Order Types)
+// FILE: include/stop_order_manager.h (UPDATED)
 // ============================================================================
 #pragma once
 #include "order.h"
@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstdint>
 #include <chrono>
+#include "../vendor/json.hpp" // <-- ADDED
 
 enum class StopOrderType {
     STOP_LOSS,      // Trigger market order when price hits trigger
@@ -34,9 +35,37 @@ struct StopOrder {
     
     // Trailing stop tracking
     long long best_price;  // Track best price seen
+
+    /**
+     * @brief Helper to reconstruct a StopOrder object from JSON (for WAL replay).
+     */
+    static StopOrder from_json(const nlohmann::json& j) {
+        StopOrder so;
+        so.order_id = j.at("order_id").get<std::string>();
+        so.symbol = j.at("symbol").get<std::string>();
+        so.side = j.at("side").get<std::string>();
+        so.quantity = j.at("quantity").get<long long>();
+        so.trigger_price = j.at("trigger_price").get<long long>();
+        so.limit_price = j.value("limit_price", 0LL);
+        
+        std::string st = j.at("stop_type").get<std::string>();
+        if (st == "stop_loss") so.stop_type = StopOrderType::STOP_LOSS;
+        else if (st == "stop_limit") so.stop_type = StopOrderType::STOP_LIMIT;
+        // Add other types as needed
+        
+        long long ts_ns = j.value("timestamp_ns", 0LL);
+        if (ts_ns > 0) {
+            so.created_at = std::chrono::system_clock::time_point(std::chrono::nanoseconds(ts_ns));
+        } else {
+            so.created_at = std::chrono::system_clock::now();
+        }
+        
+        return so;
+    }
 };
 
 class StopOrderManager {
+// ... (rest of the file is unchanged)
 public:
     explicit StopOrderManager(const std::string &symbol);
     

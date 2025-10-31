@@ -1,4 +1,4 @@
-// FILE: src/main.cpp
+// FILE: src/main.cpp (UPDATED with WAL Replay)
 #include <iostream>
 #include <thread>
 #include <csignal>
@@ -6,6 +6,8 @@
 #include "../include/order.h"
 #include "../include/wal.h"
 #include "../include/ws_server.h"
+#include "../include/global_state.h" // <-- ADDED
+#include <map>                       // <-- ADDED
 
 // forward declarations
 void setup_server(int port);
@@ -19,6 +21,96 @@ void signal_handler(int signal) {
     std::cout << "\n[Main] Shutdown signal received (" << signal << ")\n";
     shutdown_requested = true;
 }
+
+/**
+ * @brief Reconstructs the engine's state from WAL entries.
+ */
+void replay_wal() {
+    std::cout << "[WAL] Starting WAL replay...\n";
+    auto entries = global_wal.replay();
+    
+    if (entries.empty()) {
+        std::cout << "[WAL] No entries found (fresh start).\n";
+        return;
+    }
+
+    std::cout << "[WAL] Replaying " << entries.size() << " entries...\n";
+    
+    int order_count = 0;
+    int cancel_count = 0;
+    int trade_count = 0;
+    int unknown_count = 0;
+
+    for (const auto& entry : entries) {
+        try {
+            std::string type = entry.at("type").get<std::string>();
+            auto payload = entry.at("payload");
+            
+            if (type == "order") {
+                std::string symbol = payload.at("symbol").get<std::string>();
+                
+                // Ensure book and stop manager exist for this symbol
+                g_order_books.try_emplace(symbol, symbol);
+                g_stop_order_managers.try_emplace(symbol, symbol);
+
+                std::string order_type = payload.value("order_type", "");
+                
+                if (order_type == "stop") {
+                    // This is a stop order
+                    StopOrder stop_order = StopOrder::from_json(payload);
+                    g_stop_order_managers.at(symbol).add_stop_order(stop_order);
+                    g_order_to_symbol[stop_order.order_id] = symbol;
+                } else {
+                    // This is a regular limit/market/ioc/fok order
+                    Order order = Order::from_json(payload);
+                    // Replay the order by adding it to the book.
+                    // We ignore the returned trades, as we only care about state.
+                    g_order_books.at(symbol).add_order(order);
+                    // Track the order ID
+                    g_order_to_symbol[order.order_id] = symbol;
+                }
+                order_count++;
+
+            } else if (type == "cancel") {
+                std::string order_id = payload.at("order_id").get<std::string>();
+                
+                auto it = g_order_to_symbol.find(order_id);
+                if (it != g_order_to_symbol.end()) {
+                    std::string symbol = it->second;
+                    
+                    // Try to cancel from both books
+                    g_order_books.at(symbol).cancel_order(order_id);
+                    g_stop_order_managers.at(symbol).cancel_stop_order(order_id);
+                    
+                    g_order_to_symbol.erase(it); // Remove from tracking
+                }
+                cancel_count++;
+
+            } else if (type == "trade") {
+                // Trades are a result, not state.
+                // Replaying orders will rebuild the book state.
+                // We just count them for info.
+                trade_count++;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "[WAL] Error replaying entry: " << e.what() << "\n" << entry.dump(2) << std::endl;
+            unknown_count++;
+        }
+    }
+
+    std::cout << "[WAL] Replay complete. Orders: " << order_count
+              << ", Cancels: " << cancel_count
+              << ", (Ignored) Trades: " << trade_count
+              << ", Errors: " << unknown_count << "\n";
+    
+    std::cout << "[WAL] Current State:\n";
+    for (auto& [symbol, book] : g_order_books) {
+        std::cout << "  - Symbol " << symbol 
+                  << ": Bids=" << book.top_bids(1).size() 
+                  << ", Asks=" << book.top_asks(1).size() << "\n";
+    }
+}
+
 
 int main(int argc, char** argv) {
     int http_port = 8080;
@@ -38,6 +130,15 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    // --- UPDATED: Replay WAL *before* starting servers ---
+    try {
+        replay_wal();
+    } catch (const std::exception &e) {
+        std::cerr << "[Main] CRITICAL: WAL replay failed: " << e.what() << "\n";
+        return 1;
+    }
+    // --- END UPDATED ---
+
     // Initialize WebSocket server
     std::cout << "[Main] Initializing WebSocket server...\n";
     global_ws_server = new WebSocketServer(ws_port);
@@ -53,21 +154,6 @@ int main(int argc, char** argv) {
 
     // Give WebSocket server time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Optional: Replay WAL for recovery
-    std::cout << "[Main] Checking for WAL replay...\n";
-    try {
-        auto entries = global_wal.replay();
-        if (!entries.empty()) {
-            std::cout << "[Main] Found " << entries.size() << " WAL entries\n";
-            std::cout << "[Main] Note: Full state recovery not implemented yet\n";
-            // TODO: Reconstruct order books from WAL entries
-        } else {
-            std::cout << "[Main] No WAL entries found (fresh start)\n";
-        }
-    } catch (const std::exception &e) {
-        std::cerr << "[Main] WAL replay error: " << e.what() << "\n";
-    }
 
     std::cout << "\n[Main] Starting HTTP server...\n";
     
