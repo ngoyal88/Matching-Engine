@@ -183,13 +183,14 @@ void setup_server(int port) {
                     global_ws_server->broadcast_trade(t);
                 }
             }
-
-            // Broadcast orderbook update
+                
+            //Broadcast orderbook update
             if (global_ws_server && global_ws_server->is_running()) {
                 auto bids = book.top_bids(10);
                 auto asks = book.top_asks(10);
                 global_ws_server->broadcast_orderbook_update(symbol, bids, asks);
             }
+            
 
             // Build response
             json resp;

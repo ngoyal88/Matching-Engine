@@ -58,6 +58,17 @@ endif()
 
 add_test(NAME order_tests COMMAND tests)
 
+# Benchmark tool
+add_executable(benchmark
+    tests/benchmark.cpp
+)
+
+if(WIN32)
+    target_link_libraries(benchmark PRIVATE ws2_32)
+else()
+    target_link_libraries(benchmark PRIVATE pthread)
+endif()
+
 # Print configuration
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "C++ standard: ${CMAKE_CXX_STANDARD}")

@@ -1,3 +1,5 @@
 build/
 vendor/
 .vscode/
+node_modules/
+client/
