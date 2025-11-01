@@ -106,14 +106,15 @@ The server runs two services: a **REST API** (default port 8080) and a **WebSock
 
 ### REST API (Port 8080)
 
-#### POST /orders
+---
+
+#### • **POST** `/orders`
 
 Submits a new order.
 
-**Body (JSON)**:
+- **Body (JSON)**:
 
-JSON
-
+```json
 {
   "symbol": "BTC-USDT",
   "order_type": "limit", // "limit", "market", "ioc", "fok"
@@ -123,7 +124,7 @@ JSON
 }
 ```
 
-**Success Response (200 OK)**:
+- **Success Response (200 OK)**:
 
 ```json
 {
@@ -138,11 +139,13 @@ JSON
 }
 ```
 
-#### POST /orders/stop
+---
+
+#### • **POST** `/orders/stop`
 
 Submits a new stop order.
 
-**Body (JSON)**:
+- **Body (JSON)**:
 
 ```json
 {
@@ -155,7 +158,7 @@ Submits a new stop order.
 }
 ```
 
-**Success Response (200 OK)**:
+- **Success Response (200 OK)**:
 
 ```json
 {
@@ -165,14 +168,15 @@ Submits a new stop order.
 }
 ```
 
-#### DELETE /orders/<order_id>
+---
+
+#### • **DELETE** `/orders/<order_id>`
 
 Cancels an active limit or stop order by its ID.
 
-**Success Response (200 OK)**:
+- **Success Response (200 OK)**:
 
 ```json
-
 {
   "cancelled": true,
   "order_id": "ORD-123",
@@ -181,13 +185,15 @@ Cancels an active limit or stop order by its ID.
 }
 ```
 
-#### GET /orderbook/\<symbol\>
+---
 
-Example: `/orderbook/BTC-USDT`
+#### • **GET** `/orderbook/<symbol>`
 
 Retrieves a snapshot of the order book depth.
 
-**Success Response (200 OK)**:
+- **Example**: `/orderbook/BTC-USDT`
+
+- **Success Response (200 OK)**:
 
 ```json
 {
@@ -198,29 +204,39 @@ Retrieves a snapshot of the order book depth.
 }
 ```
 
-#### GET /trades/\<symbol\>
+---
 
-Example: `/trades/BTC-USDT`
+#### • **GET** `/trades/<symbol>`
 
 Retrieves recent trades for a symbol (by replaying WAL).
 
-#### GET /stats
+- **Example**: `/trades/BTC-USDT`
+
+---
+
+#### • **GET** `/stats`
 
 Retrieves global engine statistics.
 
-#### GET /health
+---
+
+#### • **GET** `/health`
 
 Simple health check endpoint.
+
+---
 
 ### WebSocket API (Port 9002)
 
 Connect to `ws://localhost:9002`. The server pushes two types of messages:
 
-**Trade Execution Report**:
+---
+
+#### • **Trade Execution Report**
 
 Sent whenever a trade occurs.
 
-**Format**:
+- **Format**:
 
 ```json
 {
@@ -240,11 +256,15 @@ Sent whenever a trade occurs.
 }
 ```
 
-**L2 Order Book Update**:
+---
+
+#### • **L2 Order Book Update**
 
 Sent after any event that changes the order book (new order, cancel, trade).
 
-**Format**:
+Sent after any event that changes the order book (new order, cancel, trade).
+
+- **Format**:
 
 ```json
 {
@@ -257,6 +277,8 @@ Sent after any event that changes the order book (new order, cancel, trade).
   }
 }
 ```
+
+---
 
 ## 🔧 Build and Run
 
