@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <shared_mutex>
 using namespace std;
 
 static atomic<uint64_t> trade_counter{1};
@@ -39,7 +40,7 @@ void OrderBook::calculate_fees(Trade &trade) {
 
 vector<Trade> OrderBook::add_order(const Order &order) {
     vector<Trade> trades;
-    lock_guard<mutex> lk(mu_);
+    unique_lock<shared_mutex> lk(mu_);
 
     long long remaining = order.quantity;
     long long original_qty = order.quantity;
@@ -156,8 +157,26 @@ vector<Trade> OrderBook::add_order(const Order &order) {
     return trades;
 }
 
+void OrderBook::add_order_from_replay(const Order &order) {
+    // Only 'limit' orders can be replayed, as others are instant
+    if (order.order_type != "limit") {
+        return;
+    }
+
+    std::unique_lock<std::shared_mutex> lk(mu_);
+    
+    // Add to the correct side
+    if (order.side == "buy") {
+        bids_[order.price].push_back(order);
+    } else {
+        asks_[order.price].push_back(order);
+    }
+    // Add to index for cancellation
+    order_index_[order.order_id] = {order.price, (order.side == "buy")};
+}
+
 bool OrderBook::cancel_order(const string &order_id) {
-    lock_guard<mutex> lk(mu_);
+    unique_lock<shared_mutex> lk(mu_);
     auto it = order_index_.find(order_id);
     if (it == order_index_.end()) return false;
     
@@ -193,8 +212,8 @@ bool OrderBook::cancel_order(const string &order_id) {
     return false;
 }
 
-vector<pair<long long,long long>> OrderBook::top_bids(size_t n) {
-    lock_guard<mutex> lk(mu_);
+vector<pair<long long,long long>> OrderBook::top_bids(size_t n) const{
+    shared_lock<shared_mutex> lk(mu_);
     vector<pair<long long,long long>> out;
     for (auto it = bids_.begin(); it != bids_.end() && out.size() < n; ++it) {
         long long total = 0;
@@ -204,8 +223,8 @@ vector<pair<long long,long long>> OrderBook::top_bids(size_t n) {
     return out;
 }
 
-vector<pair<long long,long long>> OrderBook::top_asks(size_t n) {
-    lock_guard<mutex> lk(mu_);
+vector<pair<long long,long long>> OrderBook::top_asks(size_t n) const {
+    shared_lock<shared_mutex> lk(mu_);
     vector<pair<long long,long long>> out;
     for (auto it = asks_.begin(); it != asks_.end() && out.size() < n; ++it) {
         long long total = 0;

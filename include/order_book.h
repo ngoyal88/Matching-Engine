@@ -9,6 +9,7 @@
  #include <string>
  #include <vector>
  #include <unordered_map>
+ #include <shared_mutex>
 
  struct Trade {
      std::string trade_id;
@@ -34,9 +35,10 @@ public:
     
      std::vector<Trade> add_order(const Order &order);
      bool cancel_order(const std::string &order_id);
+     void add_order_from_replay(const Order &order);
 
-     std::vector<std::pair<long long,long long>> top_bids(size_t n);
-     std::vector<std::pair<long long,long long>> top_asks(size_t n);
+     std::vector<std::pair<long long,long long>> top_bids(size_t n) const;
+     std::vector<std::pair<long long,long long>> top_asks(size_t n) const;
 
      void set_fee_config(const FeeConfig &config) { fee_config_ = config; }
 
@@ -45,7 +47,7 @@ private:
      std::map<long long, std::deque<Order>, std::greater<long long>> bids_;
      std::map<long long, std::deque<Order>> asks_;
      std::unordered_map<std::string, std::pair<long long,bool>> order_index_;
-     std::mutex mu_;
+     mutable std::shared_mutex mu_;
      FeeConfig fee_config_;
     
      static std::string now_iso();

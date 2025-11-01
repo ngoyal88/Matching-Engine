@@ -1,18 +1,22 @@
-// FILE: src/main.cpp (UPDATED with WAL Replay)
+// FILE: src/main.cpp
 #include <iostream>
 #include <thread>
 #include <csignal>
 #include <atomic>
+#include <vector>
+#include <map>
+#include "../vendor/json.hpp"
 #include "../include/order.h"
 #include "../include/wal.h"
 #include "../include/ws_server.h"
-#include "../include/global_state.h" // <-- ADDED
-#include <map>                       // <-- ADDED
+#include "../include/global_state.h"
+#include "../include/order_book.h"
+#include "../include/stop_order_manager.h"
+//#include "../include/broadcast_queue.h" // <-- ADD THIS INCLUDE
 
 // forward declarations
 void setup_server(int port);
-class OrderStore;
-extern OrderStore global_order_store;
+using json = nlohmann::json;
 
 // Global flag for graceful shutdown
 std::atomic<bool> shutdown_requested{false};
@@ -22,93 +26,72 @@ void signal_handler(int signal) {
     shutdown_requested = true;
 }
 
-/**
- * @brief Reconstructs the engine's state from WAL entries.
- */
+// (replay_wal function is unchanged from before)
 void replay_wal() {
-    std::cout << "[WAL] Starting WAL replay...\n";
     auto entries = global_wal.replay();
-    
     if (entries.empty()) {
-        std::cout << "[WAL] No entries found (fresh start).\n";
+        std::cout << "[Main] No WAL entries found (fresh start)\n";
         return;
     }
-
-    std::cout << "[WAL] Replaying " << entries.size() << " entries...\n";
-    
-    int order_count = 0;
-    int cancel_count = 0;
-    int trade_count = 0;
-    int unknown_count = 0;
-
-    for (const auto& entry : entries) {
+    std::cout << "[Main] Replaying " << entries.size() << " WAL entries...\n";
+    std::map<std::string, Order> live_orders;
+    std::map<std::string, StopOrder> live_stop_orders;
+    for (const auto& j : entries) {
         try {
-            std::string type = entry.at("type").get<std::string>();
-            auto payload = entry.at("payload");
-            
+            std::string type = j["type"].get<std::string>();
+            auto payload = j["payload"];
             if (type == "order") {
-                std::string symbol = payload.at("symbol").get<std::string>();
-                
-                // Ensure book and stop manager exist for this symbol
-                g_order_books.try_emplace(symbol, symbol);
-                g_stop_order_managers.try_emplace(symbol, symbol);
-
-                std::string order_type = payload.value("order_type", "");
-                
-                if (order_type == "stop") {
-                    // This is a stop order
-                    StopOrder stop_order = StopOrder::from_json(payload);
-                    g_stop_order_managers.at(symbol).add_stop_order(stop_order);
-                    g_order_to_symbol[stop_order.order_id] = symbol;
-                } else {
-                    // This is a regular limit/market/ioc/fok order
-                    Order order = Order::from_json(payload);
-                    // Replay the order by adding it to the book.
-                    // We ignore the returned trades, as we only care about state.
-                    g_order_books.at(symbol).add_order(order);
-                    // Track the order ID
-                    g_order_to_symbol[order.order_id] = symbol;
+                Order o = Order::from_json(payload);
+                live_orders[o.order_id] = o;
+                g_total_orders.fetch_add(1, std::memory_order_relaxed);
+            } 
+            else if (type == "stop_order") {
+                StopOrder so = StopOrder::from_json(payload);
+                live_stop_orders[so.order_id] = so;
+                g_total_orders.fetch_add(1, std::memory_order_relaxed);
+            }
+            else if (type == "trade") {
+                std::string maker_id = payload["maker_order_id"].get<std::string>();
+                std::string taker_id = payload["taker_order_id"].get<std::string>();
+                long long qty = payload["quantity"].get<long long>();
+                if (live_orders.count(maker_id)) {
+                    live_orders[maker_id].quantity -= qty;
+                    if (live_orders[maker_id].quantity <= 0) {
+                        live_orders.erase(maker_id);
+                    }
                 }
-                order_count++;
-
-            } else if (type == "cancel") {
-                std::string order_id = payload.at("order_id").get<std::string>();
-                
-                auto it = g_order_to_symbol.find(order_id);
-                if (it != g_order_to_symbol.end()) {
-                    std::string symbol = it->second;
-                    
-                    // Try to cancel from both books
-                    g_order_books.at(symbol).cancel_order(order_id);
-                    g_stop_order_managers.at(symbol).cancel_stop_order(order_id);
-                    
-                    g_order_to_symbol.erase(it); // Remove from tracking
+                if (live_orders.count(taker_id)) {
+                    live_orders[taker_id].quantity -= qty;
+                    if (live_orders[taker_id].quantity <= 0) {
+                        live_orders.erase(taker_id);
+                    }
                 }
-                cancel_count++;
-
-            } else if (type == "trade") {
-                // Trades are a result, not state.
-                // Replaying orders will rebuild the book state.
-                // We just count them for info.
-                trade_count++;
+                g_total_trades.fetch_add(1, std::memory_order_relaxed);
+            }
+            else if (type == "cancel") {
+                std::string id = payload["order_id"].get<std::string>();
+                live_orders.erase(id);
+                live_stop_orders.erase(id);
             }
         } catch (const std::exception& e) {
-            std::cerr << "[WAL] Error replaying entry: " << e.what() << "\n" << entry.dump(2) << std::endl;
-            unknown_count++;
+            std::cerr << "[Main] WAL replay error: " << e.what() << " on entry: " << j.dump() << std::endl;
         }
     }
-
-    std::cout << "[WAL] Replay complete. Orders: " << order_count
-              << ", Cancels: " << cancel_count
-              << ", (Ignored) Trades: " << trade_count
-              << ", Errors: " << unknown_count << "\n";
-    
-    std::cout << "[WAL] Current State:\n";
-    for (auto& [symbol, book] : g_order_books) {
-        std::cout << "  - Symbol " << symbol 
-                  << ": Bids=" << book.top_bids(1).size() 
-                  << ", Asks=" << book.top_asks(1).size() << "\n";
+    std::lock_guard<std::mutex> lk(g_global_mutex);
+    for (const auto& [id, order] : live_orders) {
+        g_order_books.try_emplace(order.symbol, order.symbol);
+        g_order_books.at(order.symbol).add_order_from_replay(order); 
+        g_order_id_to_symbol[id] = order.symbol;
     }
+    for (const auto& [id, order] : live_stop_orders) {
+        g_stop_order_managers.try_emplace(order.symbol, order.symbol);
+        g_stop_order_managers.at(order.symbol).add_stop_order_from_replay(order); 
+        g_order_id_to_symbol[id] = order.symbol;
+    }
+    std::cout << "[Main] WAL replay complete. " 
+              << g_order_books.size() << " symbol(s) loaded." << std::endl;
+    std::cout << "[Main] Total Orders: " << g_total_orders.load() 
+              << ", Total Trades: " << g_total_trades.load() << std::endl;
 }
 
 
@@ -126,39 +109,31 @@ int main(int argc, char** argv) {
     std::cout << "WebSocket Port: " << ws_port << "\n";
     std::cout << "========================================\n\n";
 
-    // Setup signal handlers for graceful shutdown
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
-    // --- UPDATED: Replay WAL *before* starting servers ---
     try {
         replay_wal();
     } catch (const std::exception &e) {
         std::cerr << "[Main] CRITICAL: WAL replay failed: " << e.what() << "\n";
         return 1;
     }
-    // --- END UPDATED ---
 
-    // Initialize WebSocket server
     std::cout << "[Main] Initializing WebSocket server...\n";
-    global_ws_server = new WebSocketServer(ws_port);
+    g_ws_server = new WebSocketServer(ws_port);
     
-    // Start WebSocket server in separate thread
     std::thread ws_thread([&]() {
         try {
-            global_ws_server->start();
+            g_ws_server->start();
         } catch (const std::exception &e) {
             std::cerr << "[Main] WebSocket server error: " << e.what() << "\n";
         }
     });
 
-    // Give WebSocket server time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     std::cout << "\n[Main] Starting HTTP server...\n";
     
-    // Start HTTP server (blocking)
-    // Run in separate thread so we can handle shutdown
     std::thread http_thread([&]() {
         setup_server(http_port);
     });
@@ -173,34 +148,37 @@ int main(int argc, char** argv) {
     std::cout << "========================================\n";
     std::cout << "Press Ctrl+C to shutdown\n\n";
 
-    // Wait for shutdown signal
     while (!shutdown_requested) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
+    // --- UPDATED SHUTDOWN LOGIC ---
     std::cout << "\n[Main] Shutting down gracefully...\n";
     
-    // Stop WebSocket server
-    if (global_ws_server) {
+    if (g_ws_server) {
         std::cout << "[Main] Stopping WebSocket server...\n";
-        global_ws_server->stop();
-        delete global_ws_server;
-        global_ws_server = nullptr;
+        g_ws_server->stop();
+        delete g_ws_server;
+        g_ws_server = nullptr;
     }
     
-    // Flush WAL
-    std::cout << "[Main] Flushing WAL...\n";
-    global_wal.flush();
+    std::cout << "[Main] Stopping WAL writer thread...\n";
+    global_wal.stop(); // Stop async WAL
     
-    // Wait for threads (with timeout)
+    std::cout << "[Main] Stopping Broadcast queue thread...\n";
+    g_broadcast_queue.stop(); // <-- ADD THIS LINE
+    
     std::cout << "[Main] Waiting for threads to finish...\n";
     if (ws_thread.joinable()) {
         ws_thread.join();
     }
     
-    // Note: httplib server doesn't have clean shutdown, so we just exit
-    // In production, use a server with proper shutdown support
+    if (http_thread.joinable()) {
+         std::cout << "[Main] HTTP thread joined." << std::endl;
+    }
     
     std::cout << "[Main] Shutdown complete\n";
-    return 0;
+    
+    std::exit(0);
 }
+

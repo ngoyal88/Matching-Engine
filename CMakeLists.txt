@@ -25,6 +25,7 @@ add_executable(matching_engine
     src/ws_server.cpp
     src/stop_order_manager.cpp
     src/global_state.cpp
+    src/broadcast_queue.cpp
 )
 
 # Link libraries
@@ -49,10 +50,12 @@ add_executable(tests
     src/wal_integration.cpp 
     src/stop_order_manager.cpp
     src/global_state.cpp
+    src/broadcast_queue.cpp
+    src/ws_server.cpp
 )
 
 if(WIN32)
-    target_link_libraries(tests PRIVATE ws2_32)
+    target_link_libraries(tests PRIVATE ws2_32 advapi32)
 else()
     target_link_libraries(tests PRIVATE pthread)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 9.0)

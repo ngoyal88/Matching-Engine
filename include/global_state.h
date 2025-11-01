@@ -1,28 +1,28 @@
+// FILE: include/global_state.h
 #pragma once
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <atomic>
 #include "order_book.h"
 #include "stop_order_manager.h"
-#include <unordered_map>
-#include <string>
-#include <mutex>
+#include "ws_server.h"
+#include "../include/broadcast_queue.h"
 
-/**
- * @brief Defines the global state of the matching engine.
- * * These variables are declared here (extern) and defined in global_state.cpp.
- * This allows both main.cpp (for WAL replay) and server.cpp (for operations)
- * to access and modify the same state.
- */
+// This mutex protects shared access to the order books and maps
+extern std::mutex g_global_mutex;
 
-// Global map of order books, keyed by symbol (e.g., "BTC-USDT")
+// Maps for tracking and managing books
 extern std::unordered_map<std::string, OrderBook> g_order_books;
-
-// Global map of stop order managers, keyed by symbol
 extern std::unordered_map<std::string, StopOrderManager> g_stop_order_managers;
+extern std::unordered_map<std::string, std::string> g_order_id_to_symbol;
 
-// Global map to find an order's symbol by its ID (for cancellations)
-extern std::unordered_map<std::string, std::string> g_order_to_symbol;
-
-// Mutex to protect g_order_to_symbol from concurrent access
-extern std::mutex g_order_to_symbol_mutex;
-
+// Global server stats
 extern std::atomic<uint64_t> g_total_orders;
 extern std::atomic<uint64_t> g_total_trades;
+
+// Global WebSocket server instance
+extern WebSocketServer* g_ws_server;
+
+// Global Broadcast Queue
+extern BroadcastQueue g_broadcast_queue;

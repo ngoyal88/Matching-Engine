@@ -36,6 +36,20 @@ std::string StopOrderManager::add_stop_order(const StopOrder &order) {
     return stop.order_id;
 }
 
+void StopOrderManager::add_stop_order_from_replay(const StopOrder &order) {
+    std::lock_guard<std::mutex> lock(mu_);
+    
+    // Add to appropriate map
+    if (order.side == "buy") {
+        buy_stops_.insert({order.trigger_price, order});
+    } else {
+        sell_stops_.insert({order.trigger_price, order});
+    }
+    
+    // Add to index for cancellation
+    order_index_[order.order_id] = order.trigger_price;
+}
+
 bool StopOrderManager::cancel_stop_order(const std::string &order_id) {
     std::lock_guard<std::mutex> lock(mu_);
     
