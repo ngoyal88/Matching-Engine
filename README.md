@@ -306,8 +306,6 @@ cd ..
 ### 2. Build
 
 ```bash
-
-```bash
 mkdir -p build && cd build
 cmake ..
 cmake --build . -- -j4
@@ -345,4 +343,30 @@ ctest --output-on-failure
 
 ### 6. View Frontend
 
-Open `frontend/index.html` in a web browser.
+The project includes a **real-time web dashboard** to visualize order book depth, live trades, and submit orders through a user-friendly interface.
+
+**Steps to launch the frontend**:
+
+1. **Start the matching engine** (if not already running):
+   ```bash
+   cd build
+   ./matching_engine
+   ```
+
+2. **Serve the frontend** using Python HTTP server:
+   ```bash
+   cd frontend
+   python -m http.server 3000
+   ```
+
+3. **Open in browser**: Navigate to `http://localhost:3000`
+
+**Features**:
+- 📊 **Live Order Book** - Real-time L2 depth visualization with bid/ask spread
+- 📈 **Trade Feed** - Streaming trade executions with maker/taker details
+- 💹 **Order Entry** - Submit market, limit, IOC, and FOK orders
+- 🎯 **Stop Orders** - Create stop-loss and stop-limit orders
+- ❌ **Order Management** - Cancel active orders
+- 📡 **WebSocket Connection** - Live updates via WebSocket (auto-reconnect)
+
+**Note**: Make sure both the matching engine (port 8080 for HTTP, 9002 for WebSocket) and the frontend server (port 3000) are running simultaneously.
