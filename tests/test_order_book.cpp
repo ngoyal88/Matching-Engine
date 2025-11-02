@@ -23,7 +23,7 @@ void test_basic_matching() {
     assert(trades.size() == 1);
     assert(trades[0].quantity == 500000);
     assert(trades[0].price == 1000000);
-    std::cout << "[TEST] ✓ Basic matching passed\n";
+    std::cout << "[TEST] PASS - Basic matching passed\n";
 }
 
 void test_market_order() {
@@ -44,7 +44,7 @@ void test_market_order() {
     long long sum = 0;
     for (auto &t: trades) sum += t.quantity;
     assert(sum == 500000);
-    std::cout << "[TEST] ✓ Market order passed\n";
+    std::cout << "[TEST] PASS - Market order passed\n";
 }
 
 void test_ioc_order() {
@@ -66,7 +66,7 @@ void test_ioc_order() {
     // Check no resting order on book
     auto bids = ob.top_bids(10);
     assert(bids.empty());
-    std::cout << "[TEST] ✓ IOC order passed\n";
+    std::cout << "[TEST] PASS - IOC order passed\n";
 }
 
 void test_fok_order() {
@@ -90,7 +90,7 @@ void test_fok_order() {
     assert(trades2.size() == 1);
     assert(trades2[0].quantity == 300000);
     
-    std::cout << "[TEST] ✓ FOK order passed\n";
+    std::cout << "[TEST] PASS - FOK order passed\n";
 }
 
 void test_partial_fill() {
@@ -109,7 +109,7 @@ void test_partial_fill() {
     auto bids = ob.top_bids(5);
     assert(bids.size() == 1);
     assert(bids[0].second == 200000); // Remaining quantity
-    std::cout << "[TEST] ✓ Partial fill passed\n";
+    std::cout << "[TEST] PASS - Partial fill passed\n";
 }
 
 void test_price_time_priority() {
@@ -137,7 +137,7 @@ void test_price_time_priority() {
     
     assert(trades.size() == 1);
     assert(trades[0].maker_order_id == "S1");
-    std::cout << "[TEST] ✓ Price-time priority passed\n";
+    std::cout << "[TEST] PASS - Price-time priority passed\n";
 }
 
 void test_fee_calculation() {
@@ -162,7 +162,7 @@ void test_fee_calculation() {
     assert(trades[0].taker_fee > 0);
     assert(trades[0].taker_fee == 2 * trades[0].maker_fee); // 2x ratio
     
-    std::cout << "[TEST] ✓ Fee calculation passed\n";
+    std::cout << "[TEST] PASS - Fee calculation passed\n";
 }
 
 void run_order_book_tests() {
@@ -179,6 +179,6 @@ void run_order_book_tests() {
     test_fee_calculation();
     
     std::cout << "\n========================================\n";
-    std::cout << "  All Tests Passed! ✓\n";
+    std::cout << "  All Tests Passed!\n";
     std::cout << "========================================\n\n";
 }
