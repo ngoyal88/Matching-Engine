@@ -8,10 +8,10 @@
 
     <!-- 
       Using reliable CDN links for Tailwind and Lucide.
-      The Lucide CJS link is replaced with the correct UMD (browser) link.
+      The Lucide UMD link is used for browser compatibility.
     -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lucide@0.552.0/dist/cjs/lucide.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
 
     <style>
         /* Custom scrollbar */
@@ -131,11 +131,11 @@
             <!-- Left Panel (Chart & Order Form) -->
             <div class="col-span-12 lg:col-span-7 xl:col-span-7 flex flex-col gap-2">
                 
-                <!-- Chart Panel -->
+                <!-- Chart Panel 
                 <div class="flex-1 bg-gray-800 rounded shadow-lg chart-placeholder">
                     Trading Chart Placeholder
-                </div>
-                
+                </div>-->
+
                 <!-- Order Form Panel -->
                 <div class="flex-shrink-0 bg-gray-800 rounded shadow-lg p-4">
                     <form id="order-form" class="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
