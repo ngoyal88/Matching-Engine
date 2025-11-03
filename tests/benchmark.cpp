@@ -124,7 +124,7 @@ private:
             }
             
             // Progress indicator - more frequent for visibility
-            if ((i + 1) % 50 == 0 || i == 0) {
+            if ((i + 1) % 1000 == 0 || i == 0) {
                 std::cout << "Thread " << thread_id << ": " << (i + 1) << "/" << config_.orders_per_thread << " orders sent\n" << std::flush;
             }
         }
